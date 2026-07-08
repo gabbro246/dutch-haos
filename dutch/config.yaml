@@ -1,0 +1,30 @@
+name: Dutch
+version: "1.0.0"
+slug: dutch
+description: Local multiplayer Dutch card game
+url: https://github.com/gabbro246/dutch-haos/tree/main/dutch
+arch:
+  - aarch64
+  - amd64
+  - armv7
+startup: application
+boot: auto
+init: false
+stage: stable
+webui: http://[HOST]:[PORT:3000]
+watchdog: tcp://[HOST]:[PORT:3000]
+ports:
+  3000/tcp: 3000
+ports_description:
+  3000/tcp: Dutch web UI
+options:
+  dutch_repo: https://github.com/gabbro246/dutch.git
+  dutch_ref: main
+  update_on_start: true
+schema:
+  dutch_repo: url
+  dutch_ref: str
+  update_on_start: bool
+backup_exclude:
+  - dutch/.git
+  - dutch/node_modules

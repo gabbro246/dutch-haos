@@ -16,4 +16,3 @@ The add-on does not include the Dutch source code. It downloads the configured r
 
 Container port `3000` is mapped to host port `3000` by default.
 
-Use your nginx add-on to reverse proxy `dutch.winklerav.net` to the Home Assistant host IP and this port.

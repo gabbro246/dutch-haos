@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.6
+
+- Bundle Dutch source in the add-on image instead of downloading it at startup.
+- Add automated upstream sync workflow with add-on version bumps.
+
 ## 1.0.1
 
 - Simplified Readmes and removed unneccessary files

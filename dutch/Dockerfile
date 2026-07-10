@@ -12,9 +12,15 @@ LABEL \
   org.opencontainers.image.source="https://github.com/gabbro246/dutch-haos"
 
 RUN apk add --no-cache \
-  git \
   nodejs \
   npm
+
+WORKDIR /opt/dutch
+
+COPY app/package*.json ./
+RUN npm ci --omit=dev
+
+COPY app/ ./
 
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh

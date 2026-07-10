@@ -1,12 +1,10 @@
 # Dutch add-on documentation
 
-This add-on wraps the Dutch Node application without copying its source into this repository.
+This add-on wraps the bundled Dutch Node application from this repository.
 
 ## How updates work
 
-When the add-on starts, it clones or updates the repository configured in `dutch_repo` and checks out `dutch_ref`.
-
-With the default settings, restarting the add-on is enough to pick up new commits from `gabbro246/dutch` on `main`.
+The Dutch source is copied into `app/` and built into the add-on image. When `gabbro246/dutch` changes, the repository workflow copies the latest source, records the upstream commit, bumps the add-on version, and pushes a commit. Home Assistant detects that version bump as a normal add-on update.
 
 ## Web UI
 

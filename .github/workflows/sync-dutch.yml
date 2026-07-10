@@ -1,0 +1,90 @@
+name: Sync Dutch source
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types:
+      - dutch-updated
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out dutch-haos
+        uses: actions/checkout@v4
+
+      - name: Sync upstream Dutch source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "${tmp_dir}"' EXIT
+
+          git clone --depth 1 https://github.com/gabbro246/dutch.git "${tmp_dir}/dutch"
+          upstream_sha="$(git -C "${tmp_dir}/dutch" rev-parse HEAD)"
+          current_sha="$(cat dutch/SOURCE_REVISION 2>/dev/null || true)"
+
+          if [ "${upstream_sha}" = "${current_sha}" ]; then
+            echo "Dutch source is already current at ${upstream_sha}."
+            exit 0
+          fi
+
+          rm -rf dutch/app
+          mkdir -p dutch/app
+          tar \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='.DS_Store' \
+            --exclude='usage.log' \
+            -C "${tmp_dir}/dutch" \
+            -cf - . | tar -C dutch/app -xf -
+
+          printf '%s\n' "${upstream_sha}" > dutch/SOURCE_REVISION
+
+          current_version="$(
+            sed -nE 's/^version:[[:space:]]*"?([^"]+)"?[[:space:]]*$/\1/p' dutch/config.yaml | head -n 1
+          )"
+          IFS='.' read -r major minor patch extra <<< "${current_version}"
+
+          if [[ -z "${major}" || -z "${minor}" || -z "${patch}" || -n "${extra:-}" ]]; then
+            echo "Unsupported version format in dutch/config.yaml: ${current_version}" >&2
+            exit 1
+          fi
+
+          if ! [[ "${major}" =~ ^[0-9]+$ && "${minor}" =~ ^[0-9]+$ && "${patch}" =~ ^[0-9]+$ ]]; then
+            echo "Version must be numeric SemVer: ${current_version}" >&2
+            exit 1
+          fi
+
+          next_version="${major}.${minor}.$((patch + 1))"
+          sed -i -E "s/^version:.*/version: \"${next_version}\"/" dutch/config.yaml
+
+          awk \
+            -v version="${next_version}" \
+            -v sha="${upstream_sha}" \
+            'NR == 3 {
+              print "## " version
+              print ""
+              print "- Sync Dutch source to upstream commit `" substr(sha, 1, 7) "`."
+              print ""
+            }
+            { print }' \
+            dutch/CHANGELOG.md > "${tmp_dir}/CHANGELOG.md"
+          mv "${tmp_dir}/CHANGELOG.md" dutch/CHANGELOG.md
+
+          if git diff --quiet; then
+            echo "No file changes after syncing ${upstream_sha}."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dutch/app dutch/SOURCE_REVISION dutch/config.yaml dutch/CHANGELOG.md
+          git commit -m "Sync Dutch source ${upstream_sha:0:7}"
+          git push

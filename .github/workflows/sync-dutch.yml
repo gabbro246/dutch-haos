@@ -5,86 +5,123 @@ on:
   repository_dispatch:
     types:
       - dutch-updated
-  schedule:
-    - cron: "17 3 * * *"
 
 permissions:
   contents: write
 
+concurrency:
+  group: sync-dutch-source
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: gabbro246/dutch
+  ADDON_DIR: dutch
+  APP_DIR: dutch/app
+
 jobs:
   sync:
+    name: Sync upstream Dutch app
     runs-on: ubuntu-latest
-    steps:
-      - name: Check out dutch-haos
-        uses: actions/checkout@v4
 
-      - name: Sync upstream Dutch source
+    steps:
+      - name: Check out add-on repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out Dutch source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          path: upstream-dutch
+
+      - name: Copy source and use upstream version
+        id: sync
         shell: bash
         run: |
           set -euo pipefail
 
-          tmp_dir="$(mktemp -d)"
-          trap 'rm -rf "${tmp_dir}"' EXIT
+          upstream_sha="$(git -C upstream-dutch rev-parse HEAD)"
+          short_sha="${upstream_sha:0:12}"
+          current_sha=""
 
-          git clone --depth 1 https://github.com/gabbro246/dutch.git "${tmp_dir}/dutch"
-          upstream_sha="$(git -C "${tmp_dir}/dutch" rev-parse HEAD)"
-          current_sha="$(cat dutch/SOURCE_REVISION 2>/dev/null || true)"
+          if [[ -f "${ADDON_DIR}/SOURCE_REVISION" ]]; then
+            current_sha="$(tr -d '[:space:]' < "${ADDON_DIR}/SOURCE_REVISION")"
+          fi
 
-          if [ "${upstream_sha}" = "${current_sha}" ]; then
-            echo "Dutch source is already current at ${upstream_sha}."
+          if [[ "${upstream_sha}" == "${current_sha}" ]]; then
+            echo "Dutch source is already synced at ${upstream_sha}."
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
-          rm -rf dutch/app
-          mkdir -p dutch/app
-          tar \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            --exclude='.DS_Store' \
-            --exclude='usage.log' \
-            -C "${tmp_dir}/dutch" \
-            -cf - . | tar -C dutch/app -xf -
+          rsync -a --delete \
+            --exclude=".git" \
+            --exclude=".github" \
+            --exclude="node_modules" \
+            --exclude=".DS_Store" \
+            --exclude="usage.log" \
+            upstream-dutch/ "${APP_DIR}/"
 
-          printf '%s\n' "${upstream_sha}" > dutch/SOURCE_REVISION
-
-          current_version="$(
-            sed -nE 's/^version:[[:space:]]*"?([^"]+)"?[[:space:]]*$/\1/p' dutch/config.yaml | head -n 1
-          )"
-          IFS='.' read -r major minor patch extra <<< "${current_version}"
-
-          if [[ -z "${major}" || -z "${minor}" || -z "${patch}" || -n "${extra:-}" ]]; then
-            echo "Unsupported version format in dutch/config.yaml: ${current_version}" >&2
+          upstream_version="$(node -p "require('./${APP_DIR}/package.json').version")"
+          if [[ ! "${upstream_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unsupported upstream version in ${APP_DIR}/package.json: ${upstream_version}" >&2
             exit 1
           fi
 
-          if ! [[ "${major}" =~ ^[0-9]+$ && "${minor}" =~ ^[0-9]+$ && "${patch}" =~ ^[0-9]+$ ]]; then
-            echo "Version must be numeric SemVer: ${current_version}" >&2
-            exit 1
-          fi
+          printf '%s\n' "${upstream_sha}" > "${ADDON_DIR}/SOURCE_REVISION"
 
-          next_version="${major}.${minor}.$((patch + 1))"
-          sed -i -E "s/^version:.*/version: \"${next_version}\"/" dutch/config.yaml
+          node - "${upstream_version}" "${short_sha}" <<'NODE'
+          const fs = require('fs');
+          const version = process.argv[2];
+          const shortSha = process.argv[3];
 
-          awk \
-            -v version="${next_version}" \
-            -v sha="${upstream_sha}" \
-            'NR == 3 {
-              print "## " version
-              print ""
-              print "- Sync Dutch source to upstream commit `" substr(sha, 1, 7) "`."
-              print ""
+          const configPath = 'dutch/config.yaml';
+          const config = fs.readFileSync(configPath, 'utf8')
+            .replace(/^version:\s*["']?[^"'\n]+["']?/m, `version: "${version}"`);
+          fs.writeFileSync(configPath, config);
+
+          const packagePath = 'dutch/app/package.json';
+          const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          pkg.version = version;
+          fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+
+          const lockPath = 'dutch/app/package-lock.json';
+          if (fs.existsSync(lockPath)) {
+            const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            lock.version = version;
+            if (lock.packages && lock.packages['']) {
+              lock.packages[''].version = version;
             }
-            { print }' \
-            dutch/CHANGELOG.md > "${tmp_dir}/CHANGELOG.md"
-          mv "${tmp_dir}/CHANGELOG.md" dutch/CHANGELOG.md
+            fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+          }
 
-          if git diff --quiet; then
-            echo "No file changes after syncing ${upstream_sha}."
-            exit 0
-          fi
+          const changelogPath = 'dutch/CHANGELOG.md';
+          if (fs.existsSync(changelogPath)) {
+            const changelog = fs.readFileSync(changelogPath, 'utf8');
+            const entry = `## ${version}\n\n- Sync Dutch source to upstream commit \`${shortSha}\`.\n\n`;
+            fs.writeFileSync(changelogPath, changelog.replace(/^# Changelog\n\n/, `# Changelog\n\n${entry}`));
+          }
+          NODE
+
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
+          echo "version=${upstream_version}" >> "${GITHUB_OUTPUT}"
+          echo "short_sha=${short_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Commit synced source
+        if: steps.sync.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add dutch/app dutch/SOURCE_REVISION dutch/config.yaml dutch/CHANGELOG.md
-          git commit -m "Sync Dutch source ${upstream_sha:0:7}"
+          git add "${ADDON_DIR}"
+
+          if git diff --cached --quiet; then
+            echo "No files changed after sync."
+            exit 0
+          fi
+
+          git commit -m "Sync Dutch source ${{ steps.sync.outputs.version }}"
           git push

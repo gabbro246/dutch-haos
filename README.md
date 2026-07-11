@@ -4,7 +4,37 @@ This repository wraps [`gabbro246/dutch`](https://github.com/gabbro246/dutch) as
 
 It contains a vendored copy of the Dutch app in [`dutch/app`](dutch/app). The add-on runs that bundled source so Home Assistant can detect updates through the normal add-on `version` in [`dutch/config.yaml`](dutch/config.yaml).
 
-The [`Sync Dutch source`](.github/workflows/sync-dutch.yml) workflow copies new upstream changes from `gabbro246/dutch`, records the upstream commit in [`dutch/SOURCE_REVISION`](dutch/SOURCE_REVISION), bumps the add-on version, and commits the result.
+The [`Sync Dutch source`](.github/workflows/sync-dutch.yml) workflow copies new upstream changes from `gabbro246/dutch`, records the upstream commit in [`dutch/SOURCE_REVISION`](dutch/SOURCE_REVISION), sets the add-on version from Dutch's `package.json`, and commits the result.
+
+The workflow does not poll on a schedule. It runs manually or when `gabbro246/dutch` sends a `repository_dispatch` event named `dutch-updated` after a push to `main`. The sync copies Dutch source and uses Dutch's own `package.json` version as the Home Assistant add-on version, so a pushed Dutch version bump becomes the add-on update Home Assistant can notice.
+
+Add this workflow to `gabbro246/dutch` as `.github/workflows/notify-dutch-haos.yml`:
+
+```yaml
+name: Notify Dutch HAOS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch dutch-haos sync
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.DUTCH_HAOS_DISPATCH_TOKEN }}
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: 'gabbro246',
+              repo: 'dutch-haos',
+              event_type: 'dutch-updated'
+            });
+```
+
+`DUTCH_HAOS_DISPATCH_TOKEN` must be a fine-grained GitHub token with access to `gabbro246/dutch-haos` and the repository permission `Contents: read and write`.
 
 ## Install
 

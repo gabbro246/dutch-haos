@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.7
+
+- Update the Dutch source sync workflow to use Dutch package versions for Home Assistant add-on updates.
+- Document the required upstream push dispatch trigger.
+
 ## 1.1.6
 
 - Bundle Dutch source in the add-on image instead of downloading it at startup.

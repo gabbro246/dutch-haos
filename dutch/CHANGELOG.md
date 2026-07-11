@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.7
+
+- Sync Dutch source to upstream commit `3828727`.
+
 ## 1.1.6
 
 - Bundle Dutch source in the add-on image instead of downloading it at startup.

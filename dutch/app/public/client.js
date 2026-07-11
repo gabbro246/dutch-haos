@@ -123,11 +123,14 @@ function renderWaiting(state) {
   }).join('');
   const joined = state.joined;
   const me = state.players.find((p) => p.id === state.you);
-  const playerHint = state.players.length === 1 && !state.canStart ? '<p class="hint">Waiting for more players.</p>' : '';
+  const humanCount = state.players.filter((p) => !p.isBot).length;
+  const playerHintText = humanCount === 0 ? 'Waiting for a human player.' : 'Waiting for another human or a bot.';
+  const playerHint = state.players.length > 0 && !state.canStart ? `<p class="hint">${playerHintText}</p>` : '';
   app.innerHTML = `
     <div class="page waiting-page">
       <h1 class="app-title">Dutch! 🂡</h1>
       <div class="waiting-panel">
+        <p class="waiting-description">A quick online Dutch card game for people who join the room, bots, or a mix of both.</p>
         <div class="waiting-controls">
           <div class="row join-row">
             <input id="nameInput" placeholder="Name" maxlength="12" value="${joined && me ? escapeHtml(me.name) : ''}" ${joined ? 'disabled' : ''}>
@@ -135,14 +138,14 @@ function renderWaiting(state) {
             <button id="leaveBtn" ${joined ? '' : 'disabled'}>Leave</button>
           </div>
           <div class="row bot-row">
-            <select id="botTypeSelect" ${!firstAvailableBot || state.players.length >= 9 ? 'disabled' : ''}>
+            <select id="botTypeSelect" ${joined && firstAvailableBot && state.players.length < 9 ? '' : 'disabled'}>
               ${botOptions}
             </select>
-            <button id="addBotBtn" ${firstAvailableBot && state.players.length < 9 ? '' : 'disabled'}>Add bot</button>
+            <button id="addBotBtn" ${joined && firstAvailableBot && state.players.length < 9 ? '' : 'disabled'}>Add bot</button>
           </div>
         </div>
         <div class="player-list">
-          ${players || '<p class="hint">No players yet.</p>'}
+          ${players || '<p class="hint">No players yet. Join to choose settings and add bots.</p>'}
           ${players ? playerHint : ''}
         </div>
         <div class="waiting-selectors">
@@ -260,7 +263,7 @@ function renderStatus(state) {
     '<button data-action="endGameForAll">End game for all</button>',
     '<button data-action="leave">Leave game</button>',
     `<button data-action="nextRound" class="expected-action" ${r.stage === 'roundEnd' ? '' : 'disabled'}>Next round</button>`,
-    `<button data-action="newGame" ${r.stage === 'gameEnd' ? '' : 'disabled'}>New game</button>`
+    `<button data-action="newGame" class="expected-action" ${r.stage === 'gameEnd' ? '' : 'disabled'}>New game</button>`
   ].filter(Boolean).join('');
   return `
     <div class="status">
@@ -285,12 +288,13 @@ function specialLabel(type) {
 function renderPlayerField(player, state, compact) {
   const current = player.isCurrent ? ' current' : '';
   const dutchCaller = state.round.dutchCallerId === player.id ? ' dutch-caller' : '';
+  const finalTurnDone = player.finalTurnDone ? ' final-turn-done' : '';
   const roundWinner = (state.round.roundWinnerIds || []).includes(player.id);
   const gameWinner = state.round.winnerId === player.id;
   const winner = roundWinner || gameWinner ? ' winner' : '';
   const missing = player.connected ? '' : ' (missing)';
   return `
-    <div class="player-field${current}${dutchCaller}${winner}">
+    <div class="player-field${current}${dutchCaller}${finalTurnDone}${winner}">
       <div class="player-title">
         <strong>${escapeHtml(player.name)}</strong>${missing}${playerBadges(state, player)}
         <div class="player-meta">Total: ${player.total}${player.roundPoints === null ? '' : `, round: ${player.roundPoints}`}</div>
@@ -306,11 +310,12 @@ function renderPlayerField(player, state, compact) {
 function renderOwnArea(player, state) {
   const r = state.round;
   const dutchCaller = r.dutchCallerId === player.id ? ' dutch-caller' : '';
+  const finalTurnDone = player.finalTurnDone ? ' final-turn-done' : '';
   const roundWinner = (r.roundWinnerIds || []).includes(player.id);
   const gameWinner = r.winnerId === player.id;
   const winner = roundWinner || gameWinner ? ' winner' : '';
   return `
-    <section class="own-area${player.isCurrent ? ' current' : ''}${dutchCaller}${winner}">
+    <section class="own-area${player.isCurrent ? ' current' : ''}${dutchCaller}${finalTurnDone}${winner}">
       <h2>Your cards</h2>
       <div class="player-title">
         <strong>${escapeHtml(player.name)}</strong>${playerBadges(state, player)}
@@ -346,15 +351,13 @@ function playerBadges(state, player) {
 
 function renderDeckPile(state) {
   const r = state.round;
-  const drawn = r.drawn ? `
-    <div class="drawn-area">
-      <div>Drawn</div>
-      <div class="drawn-card-slot">
-        ${cardHtml(r.drawn.card, false, { 'data-anim-role': 'drawn', 'data-location-key': 'drawn', 'data-selected': r.drawn.source === 'pile' ? 'true' : '' })}
-      </div>
-      <button data-action="discardDrawn" ${r.controls.canDiscardDrawn ? '' : 'disabled'}>Discard</button>
-    </div>
-  ` : '';
+  const drawnCard = r.drawn
+    ? cardHtml(r.drawn.card, false, { 'data-anim-role': 'drawn', 'data-location-key': 'drawn', 'data-drawn-card': 'true' })
+    : '<div class="card empty-card drawn-placeholder">empty</div>';
+  const drawnLabel = r.drawn ? '<div>Drawn</div>' : '<div class="drawn-label-spacer" aria-hidden="true">Drawn</div>';
+  const discardButton = r.drawn
+    ? `<button data-action="discardDrawn" ${r.controls.canDiscardDrawn ? '' : 'disabled'}>Discard</button>`
+    : '<button class="drawn-button-spacer" disabled aria-hidden="true" tabindex="-1">Discard</button>';
 
   return `
     <section class="deck-pile-area">
@@ -363,16 +366,22 @@ function renderDeckPile(state) {
         <div class="stack" data-stack="deck">
           ${stackBacks(r.deckCount, r.deckBack)}
         </div>
-        <button data-action="takeDeck" ${r.controls.canTake ? '' : 'disabled'}>Take</button>
+        <button data-action="takeDeck" class="expected-action" ${r.controls.canTake ? '' : 'disabled'}>Take</button>
+      </div>
+      <div class="drawn-area">
+        ${drawnLabel}
+        <div class="drawn-card-slot">
+          ${drawnCard}
+        </div>
+        ${discardButton}
       </div>
       <div class="stack-area">
         <div>Pile (${r.discardCount})</div>
         <div class="stack" data-stack="pile">
           ${stackPile(r)}
         </div>
-        <button data-action="takePile" ${r.controls.canTake && r.discardCount > 0 ? '' : 'disabled'}>Take</button>
+        <button data-action="takePile" class="expected-action" ${r.controls.canTake && r.discardCount > 0 ? '' : 'disabled'}>Take</button>
       </div>
-      ${drawn}
     </section>
   `;
 }

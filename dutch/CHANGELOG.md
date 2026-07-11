@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.9
+
+- Sync Dutch source to upstream commit `be2bb1d03e7b`.
+
 ## 1.1.7
 
 - Update the Dutch source sync workflow to use Dutch package versions for Home Assistant add-on updates.

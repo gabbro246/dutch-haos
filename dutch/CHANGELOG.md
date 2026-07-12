@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.26
+
+- Sync Dutch source to upstream commit `13f59888a2ae`.
+
 ## 1.1.25
 
 - Sync Dutch source to upstream commit `a08761e5f6c3`.

@@ -2,6 +2,10 @@
 
 ## 1.1.11
 
+- Sync Dutch source to upstream commit `8b5ea05bd7c4`.
+
+## 1.1.11
+
 - Sync Dutch source to upstream commit `0e67c36160c3`.
 
 ## 1.1.9

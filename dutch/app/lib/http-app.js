@@ -1,7 +1,6 @@
 const express = require('express');
 const fs = require('fs');
 
-
 function createHttpApp({ indexPath, publicDir, appVersion }) {
   const app = express();
 

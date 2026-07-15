@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.23
+
+- Sync Dutch 1.2.23 source to upstream commit `ba583bb32ef4`.
+
 ## 1.2.21
 
 - Add a configurable Home Assistant share-backed Dutch game log path.

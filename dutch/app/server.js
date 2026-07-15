@@ -29,12 +29,12 @@ const WAITING_ROOM_TIMEOUT_MS = 15 * 60 * 1000;
 const GAME_INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
 const JACK_SWAP_SELECTION_MS = 500;
 const ADMIN_LOG_PATH = path.join(__dirname, 'usage.log');
-const GAME_LOG_DIR = path.join(__dirname, 'game-logs');
+const GAME_LOG_DIR = process.env.DUTCH_GAME_LOG_DIR || (fs.existsSync('/share') ? '/share/dutch/logs' : path.join(__dirname, 'game-logs'));
 const APP_VERSION = packageInfo.version;
 const SPECTATOR_TRIGGER_NAME = 'spectator';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const INDEX_PATH = path.join(PUBLIC_DIR, 'index.html');
-const app = createHttpApp({ indexPath: INDEX_PATH, publicDir: PUBLIC_DIR, appVersion: APP_VERSION });
+const app = createHttpApp({ indexPath: INDEX_PATH, publicDir: PUBLIC_DIR, appVersion: APP_VERSION, gameLogDir: GAME_LOG_DIR });
 const server = http.createServer(app);
 const io = new Server(server);
 
@@ -166,6 +166,7 @@ function adminLog(event, data = {}) {
     event,
     ...data
   };
+  console.log(`[dutch] ${event} ${JSON.stringify(data)}`);
   fs.appendFile(ADMIN_LOG_PATH, JSON.stringify(entry) + '\n', (error) => {
     if (error) console.error('Could not write admin usage log:', error.message);
   });

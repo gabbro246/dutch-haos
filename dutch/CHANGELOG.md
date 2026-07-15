@@ -1,9 +1,12 @@
 # Changelog
 
+## 1.2.20
+
+- Remove the public saved-log web UI while keeping Home Assistant share-backed log storage.
+
 ## 1.2.19
 
 - Restore Home Assistant share-backed game log files under `/share/dutch/logs`.
-- Restore the Dutch web UI `/logs` page for saved text logs.
 - Send important game lifecycle events to the Home Assistant add-on log.
 
 ## 1.2.18

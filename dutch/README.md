@@ -13,3 +13,7 @@ The workflow does not poll on a schedule. It runs manually or when the upstream 
 ## Network
 
 Container port `3000` is mapped to host port `3000` by default.
+
+## Logs
+
+Important lifecycle events such as game start and game end are written to the Home Assistant add-on log. Full per-game turn logs are saved as text files in `/share/dutch/logs` and are available from the Dutch web UI at `/logs`.

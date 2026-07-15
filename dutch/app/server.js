@@ -13,6 +13,7 @@ const PORT = process.env.PORT || 3000;
 const DISCONNECT_GRACE_MS = 15 * 60 * 1000;
 const WAITING_ROOM_TIMEOUT_MS = 15 * 60 * 1000;
 const ADMIN_LOG_PATH = path.join(__dirname, 'usage.log');
+const GAME_LOG_DIR = process.env.DUTCH_GAME_LOG_DIR || (fs.existsSync('/share') ? '/share/dutch/logs' : path.join(__dirname, 'game-logs'));
 const APP_VERSION = packageInfo.version;
 
 app.use(express.static('public'));
@@ -99,6 +100,9 @@ function freshState() {
     gameTarget: 100,
     players: [],
     log: [],
+    gameLog: [],
+    gameStartedAt: null,
+    gameLogSaved: false,
     roundNumber: 0,
     scoreHistory: [],
     round: null,
@@ -113,7 +117,9 @@ function publicPlayerCount() {
 function addLog(text, kind = 'game') {
   if (!text) return;
   if (state.round && kind === 'game') state.round.botTick = (state.round.botTick || 0) + 1;
-  state.log.unshift({ text, kind });
+  const entry = { text, kind, datetime: new Date().toISOString() };
+  state.log.unshift(entry);
+  state.gameLog.push(entry);
   if (state.log.length > 80) state.log.length = 80;
 }
 
@@ -123,10 +129,144 @@ function adminLog(event, data = {}) {
     event,
     ...data
   };
+  console.log(`[dutch] ${event} ${JSON.stringify(data)}`);
   fs.appendFile(ADMIN_LOG_PATH, JSON.stringify(entry) + '\n', (error) => {
     if (error) console.error('Could not write admin usage log:', error.message);
   });
 }
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeLogFileName(name) {
+  return path.basename(String(name || '')).replace(/[^A-Za-z0-9._-]/g, '');
+}
+
+function localLogTime(entry) {
+  const date = new Date(entry.datetime || Date.now());
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('sv-SE');
+}
+
+function gameLogFileName(startedAt = new Date()) {
+  const stamp = new Date(startedAt).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[:]/g, '-');
+  return `dutch-${stamp}.txt`;
+}
+
+function scoreLines() {
+  const rows = state.scoreHistory || [];
+  if (rows.length === 0) return ['No completed rounds.'];
+  const last = rows[rows.length - 1];
+  return last.players
+    .slice()
+    .sort((a, b) => a.total - b.total)
+    .map((player) => `${player.name}: ${player.total} total (${player.roundPoints} this round)`);
+}
+
+function finishedGameLogText(reason = '') {
+  const startedAt = state.gameStartedAt ? new Date(state.gameStartedAt) : null;
+  const endedAt = new Date();
+  const players = activePlayers().map((p) => p.name).join(', ') || 'No active players';
+  const lines = [
+    'Dutch game log',
+    `Started: ${startedAt ? startedAt.toISOString() : 'unknown'}`,
+    `Ended: ${endedAt.toISOString()}`,
+    `Reason: ${reason || 'game ended'}`,
+    `Target: ${state.gameTarget}`,
+    `Players: ${players}`,
+    '',
+    'Final scores:',
+    ...scoreLines(),
+    '',
+    'Events:'
+  ];
+
+  const entries = (state.gameLog || state.log || []).slice();
+  if (entries.length === 0) {
+    lines.push('No events recorded.');
+  } else {
+    for (const entry of entries) {
+      const line = typeof entry === 'string' ? { text: entry, kind: 'game' } : entry;
+      const kind = line.kind === 'system' ? 'system' : 'game';
+      lines.push(`[${localLogTime(line)}] [${kind}] ${line.text}`);
+    }
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+function saveFinishedGameLog(reason = 'game ended') {
+  if (state.phase !== 'playing' || state.gameLogSaved || state.log.length === 0) return;
+  state.gameLogSaved = true;
+  const fileName = gameLogFileName(state.gameStartedAt || new Date());
+  const filePath = path.join(GAME_LOG_DIR, fileName);
+  const logText = finishedGameLogText(reason);
+  fs.mkdir(GAME_LOG_DIR, { recursive: true }, (mkdirError) => {
+    if (mkdirError) {
+      console.error('Could not create Dutch game log directory:', mkdirError.message);
+      return;
+    }
+    fs.writeFile(filePath, logText, (writeError) => {
+      if (writeError) console.error('Could not write Dutch game log:', writeError.message);
+    });
+  });
+}
+
+function htmlPage(title, body) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  ${body}
+</body>
+</html>`;
+}
+
+app.get('/logs', (req, res) => {
+  fs.readdir(GAME_LOG_DIR, { withFileTypes: true }, (error, entries) => {
+    const files = error ? [] : entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.txt'))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse();
+    const list = files.length > 0
+      ? files.map((fileName) => '<li><a href="/logs/' + encodeURIComponent(fileName) + '">' + escapeHtml(fileName) + '</a></li>').join('')
+      : '<li>No saved game logs yet.</li>';
+    const note = error && error.code !== 'ENOENT'
+      ? '<p class="hint">Could not read ' + escapeHtml(GAME_LOG_DIR) + ': ' + escapeHtml(error.message) + '</p>'
+      : '<p class="hint">Saved as text files in ' + escapeHtml(GAME_LOG_DIR) + '.</p>';
+    res.type('html').send(htmlPage('Dutch game logs',
+      '<main class="logs-page">' +
+        '<h1>Dutch game logs</h1>' +
+        note +
+        '<ol class="saved-log-list">' + list + '</ol>' +
+        '<p><a href="/">Back to game</a></p>' +
+      '</main>'
+    ));
+  });
+});
+
+app.get('/logs/:fileName', (req, res) => {
+  const fileName = safeLogFileName(req.params.fileName);
+  if (!fileName || fileName !== req.params.fileName || !fileName.endsWith('.txt')) {
+    res.status(404).type('text').send('Log file not found.\n');
+    return;
+  }
+  res.sendFile(path.join(GAME_LOG_DIR, fileName), (error) => {
+    if (error && !res.headersSent) res.status(error.statusCode || 404).type('text').send('Log file not found.\n');
+  });
+});
 
 function hostAddresses() {
   return Object.values(os.networkInterfaces())
@@ -1279,6 +1419,9 @@ function startGame() {
   if (state.phase !== 'waiting' || !hasPlayableHumanGame()) return;
   state.phase = 'playing';
   state.log = [];
+  state.gameLog = [];
+  state.gameStartedAt = new Date().toISOString();
+  state.gameLogSaved = false;
   state.roundNumber = 0;
   state.scoreHistory = [];
   for (const p of state.players) {
@@ -1397,6 +1540,7 @@ function endRound() {
     const winner = scoringPlayers.slice().sort((a, b) => a.total - b.total)[0];
     round.winnerId = winner ? winner.id : null;
     addLog(`game ended. ${winner ? winner.name : 'No one'} won`);
+    saveFinishedGameLog(`game ended. ${winner ? winner.name : 'No one'} won`);
     adminLog('game_ended_by_score', { target: state.gameTarget, winner: winner ? winner.name : null, scores: scoreSnapshot() });
   } else {
     addLog('round ended');
@@ -1410,8 +1554,9 @@ function nextRound() {
 
 function resetToWaiting(keepPlayers = true, reason = 'returned to waiting room', options = {}) {
   clearBotTimers();
-  if (state.phase === 'playing' && options.adminEvent) {
-    adminLog(options.adminEvent, { reason, scores: scoreSnapshot() });
+  if (state.phase === 'playing') {
+    saveFinishedGameLog(reason);
+    if (options.adminEvent) adminLog(options.adminEvent, { reason, scores: scoreSnapshot() });
   }
   const players = keepPlayers ? state.players.filter((p) => p.connected && !p.left).map((p) => ({
     id: p.id,

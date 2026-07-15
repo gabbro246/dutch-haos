@@ -585,3 +585,24 @@ summary {
     min-width: 0;
   }
 }
+
+.logs-page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+.logs-page h1 {
+  margin-top: 0;
+}
+
+.saved-log-list {
+  padding-left: 22px;
+  line-height: 1.7;
+}
+
+.saved-log-list a {
+  color: #174ea6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+}

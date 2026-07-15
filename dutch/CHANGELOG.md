@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.8
+
+- Add Home Assistant-accessible saved game logs under `/share/dutch/logs`.
+- Show saved game log text files from the Dutch web UI.
+- Send important game lifecycle events to the Home Assistant add-on log.
+
 ## 1.1.7
 
 - Update the Dutch source sync workflow to use Dutch package versions for Home Assistant add-on updates.

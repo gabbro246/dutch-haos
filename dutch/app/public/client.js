@@ -66,7 +66,7 @@ function attrsToText(attrs = {}) {
 
 function repoLink(version = '') {
   const versionText = version ? ` <span class="version-label">v${escapeHtml(version)}</span>` : '';
-  return `<p class="repo-link"><a href="https://github.com/gabbro246/dutch" target="_blank" rel="noopener">github.com/gabbro246/dutch</a>${versionText}</p>`;
+  return `<p class="repo-link"><a href="/logs">game logs</a> · <a href="https://github.com/gabbro246/dutch" target="_blank" rel="noopener">github.com/gabbro246/dutch</a>${versionText}</p>`;
 }
 
 function playerNameTaken(state, name) {

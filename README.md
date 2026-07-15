@@ -44,3 +44,5 @@ jobs:
 4. Start it.
 
 The add-on exposes the Dutch web UI on container port `3000`, mapped to host port `3000` by default. You can change the host port in the add-on Network settings if needed.
+
+Game logs are written to the configured `game_log_dir`, which defaults to `/share/dutch/logs`. The add-on maps Home Assistant's `share` folder read-write, so this path is backed by the Home Assistant share folder.

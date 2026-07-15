@@ -19,3 +19,7 @@ ports:
   3000/tcp: 3000
 ports_description:
   3000/tcp: Dutch web UI
+options:
+  game_log_dir: /share/dutch/logs
+schema:
+  game_log_dir: str

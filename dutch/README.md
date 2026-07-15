@@ -17,3 +17,5 @@ Container port `3000` is mapped to host port `3000` by default.
 ## Logs
 
 Important lifecycle events such as game start and game end are written to the Home Assistant add-on log. Full per-game turn logs are saved as text files in `/share/dutch/logs` for Home Assistant access.
+
+The add-on maps Home Assistant's `share` folder into the container as `/share`. The `game_log_dir` setting defaults to `/share/dutch/logs`, so those log files are stored in the Home Assistant share folder. For local/non-add-on runs, Dutch falls back to `app/game-logs`.

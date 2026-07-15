@@ -4,7 +4,7 @@ This add-on wraps the bundled Dutch Node application from this repository.
 
 ## How updates work
 
-The Dutch source is copied into `app/` and built into the add-on image. When `gabbro246/dutch` changes, the repository workflow copies the latest source, records the upstream commit, writes Dutch's `package.json` version to the add-on version, and pushes a commit. Home Assistant detects that version change as a normal add-on update.
+The Dutch source is copied into `app/` and built into the add-on image. When `gabbro246/dutch` changes, the repository workflow copies the latest source, records the upstream commit, keeps Dutch's package version in the bundled app, bumps the Home Assistant add-on version, and pushes a commit. Home Assistant detects that version change as a normal add-on update.
 
 The workflow does not poll on a schedule. Configure the upstream Dutch repository to send a `repository_dispatch` event named `dutch-updated` to this repository after pushes to `main`.
 

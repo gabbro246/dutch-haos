@@ -2,11 +2,11 @@
 
 This repository wraps [`gabbro246/dutch`](https://github.com/gabbro246/dutch) as a Home Assistant add-on.
 
-It contains a vendored copy of the Dutch app in [`dutch/app`](dutch/app). The add-on runs that bundled source so Home Assistant can detect updates through the normal add-on `version` in [`dutch/config.yaml`](dutch/config.yaml).
+It contains a vendored copy of the Dutch app in [`dutch/app`](dutch/app). The add-on runs that bundled source while Home Assistant detects updates through the add-on `version` in [`dutch/config.yaml`](dutch/config.yaml).
 
-The [`Sync Dutch source`](.github/workflows/sync-dutch.yml) workflow copies new upstream changes from `gabbro246/dutch`, records the upstream commit in [`dutch/SOURCE_REVISION`](dutch/SOURCE_REVISION), sets the add-on version from Dutch's `package.json`, and commits the result.
+The [`Sync Dutch source`](.github/workflows/sync-dutch.yml) workflow copies new upstream changes from `gabbro246/dutch`, records the upstream commit in [`dutch/SOURCE_REVISION`](dutch/SOURCE_REVISION), bumps the Home Assistant add-on version, keeps the Dutch app package version in sync, and commits the result.
 
-The workflow does not poll on a schedule. It runs manually or when `gabbro246/dutch` sends a `repository_dispatch` event named `dutch-updated` after a push to `main`. The sync copies Dutch source and uses Dutch's own `package.json` version as the Home Assistant add-on version, so a pushed Dutch version bump becomes the add-on update Home Assistant can notice.
+The workflow does not poll on a schedule. It runs manually or when `gabbro246/dutch` sends a `repository_dispatch` event named `dutch-updated` after a push to `main`. The sync copies Dutch source and bumps the Home Assistant add-on version so Home Assistant can notice the update. A separate wrapper workflow bumps the add-on version for `dutch-haos` changes that do not touch the vendored Dutch app.
 
 Add this workflow to `gabbro246/dutch` as `.github/workflows/notify-dutch-haos.yml`:
 

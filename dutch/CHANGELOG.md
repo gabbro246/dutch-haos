@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.21
+
+- Add a configurable Home Assistant share-backed Dutch game log path.
+- Add automated Home Assistant add-on version bumps for wrapper-only updates.
+
 ## 1.2.20
 
 - Remove the public saved-log web UI while keeping Home Assistant share-backed log storage.

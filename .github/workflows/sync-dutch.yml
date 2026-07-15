@@ -35,7 +35,7 @@ jobs:
           repository: ${{ env.UPSTREAM_REPOSITORY }}
           path: upstream-dutch
 
-      - name: Copy source and use upstream version
+      - name: Copy source and bump add-on version
         id: sync
         shell: bash
         run: |
@@ -55,6 +55,15 @@ jobs:
             exit 0
           fi
 
+          current_addon_version="$(node - <<'NODE'
+          const fs = require('fs');
+          const config = fs.readFileSync('dutch/config.yaml', 'utf8');
+          const match = config.match(/^version:\s*["']?([^"'\n]+)["']?/m);
+          if (!match) process.exit(1);
+          console.log(match[1]);
+          NODE
+          )"
+
           rsync -a --delete \
             --exclude=".git" \
             --exclude=".github" \
@@ -68,30 +77,47 @@ jobs:
             echo "Unsupported upstream version in ${APP_DIR}/package.json: ${upstream_version}" >&2
             exit 1
           fi
+          if [[ ! "${current_addon_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unsupported add-on version in ${ADDON_DIR}/config.yaml: ${current_addon_version}" >&2
+            exit 1
+          fi
 
           printf '%s\n' "${upstream_sha}" > "${ADDON_DIR}/SOURCE_REVISION"
 
-          node - "${upstream_version}" "${short_sha}" <<'NODE'
+          addon_version="$(node - "${current_addon_version}" "${upstream_version}" <<'NODE'
+          const current = process.argv[2].split('.').map(Number);
+          const upstream = process.argv[3].split('.').map(Number);
+          const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+          if (compare(upstream, current) > 0) {
+            console.log(upstream.join('.'));
+          } else {
+            console.log([current[0], current[1], current[2] + 1].join('.'));
+          }
+          NODE
+          )"
+
+          node - "${addon_version}" "${upstream_version}" "${short_sha}" <<'NODE'
           const fs = require('fs');
-          const version = process.argv[2];
-          const shortSha = process.argv[3];
+          const addonVersion = process.argv[2];
+          const appVersion = process.argv[3];
+          const shortSha = process.argv[4];
 
           const configPath = 'dutch/config.yaml';
           const config = fs.readFileSync(configPath, 'utf8')
-            .replace(/^version:\s*["']?[^"'\n]+["']?/m, `version: "${version}"`);
+            .replace(/^version:\s*["']?[^"'\n]+["']?/m, `version: "${addonVersion}"`);
           fs.writeFileSync(configPath, config);
 
           const packagePath = 'dutch/app/package.json';
           const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-          pkg.version = version;
+          pkg.version = appVersion;
           fs.writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
 
           const lockPath = 'dutch/app/package-lock.json';
           if (fs.existsSync(lockPath)) {
             const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-            lock.version = version;
+            lock.version = appVersion;
             if (lock.packages && lock.packages['']) {
-              lock.packages[''].version = version;
+              lock.packages[''].version = appVersion;
             }
             fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
           }
@@ -99,13 +125,14 @@ jobs:
           const changelogPath = 'dutch/CHANGELOG.md';
           if (fs.existsSync(changelogPath)) {
             const changelog = fs.readFileSync(changelogPath, 'utf8');
-            const entry = `## ${version}\n\n- Sync Dutch source to upstream commit \`${shortSha}\`.\n\n`;
+            const entry = `## ${addonVersion}\n\n- Sync Dutch ${appVersion} source to upstream commit \`${shortSha}\`.\n\n`;
             fs.writeFileSync(changelogPath, changelog.replace(/^# Changelog\n\n/, `# Changelog\n\n${entry}`));
           }
           NODE
 
           echo "changed=true" >> "${GITHUB_OUTPUT}"
-          echo "version=${upstream_version}" >> "${GITHUB_OUTPUT}"
+          echo "version=${addon_version}" >> "${GITHUB_OUTPUT}"
+          echo "app_version=${upstream_version}" >> "${GITHUB_OUTPUT}"
           echo "short_sha=${short_sha}" >> "${GITHUB_OUTPUT}"
 
       - name: Commit synced source

@@ -27,9 +27,10 @@ const PORT = process.env.PORT || 3000;
 const DISCONNECT_GRACE_MS = 15 * 60 * 1000;
 const WAITING_ROOM_TIMEOUT_MS = 15 * 60 * 1000;
 const GAME_INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
+const BOT_FINISHED_GAME_RESET_MS = 60 * 1000;
 const JACK_SWAP_SELECTION_MS = 500;
 const ADMIN_LOG_PATH = path.join(__dirname, 'usage.log');
-const GAME_LOG_DIR = process.env.DUTCH_GAME_LOG_DIR || (fs.existsSync('/share') ? '/share/dutch/logs' : path.join(__dirname, 'game-logs'));
+const GAME_LOG_DIR = path.join(__dirname, 'game-logs');
 const APP_VERSION = packageInfo.version;
 const SPECTATOR_TRIGGER_NAME = 'spectator';
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1340,6 +1341,15 @@ function scheduleBotAutomation() {
     scheduleBotTimer(botScheduleKey(['nextRound', state.roundNumber]), randomBetween(1400, 2600), () => {
       if (state.phase === 'playing' && state.round && state.round.stage === 'roundEnd' && onlyBotsArePlaying()) {
         nextRound();
+        broadcastState();
+      }
+    });
+  }
+
+  if (round.stage === 'gameEnd' && onlyBotsArePlaying()) {
+    scheduleBotTimer(botScheduleKey(['finishedGameReset', state.roundNumber]), BOT_FINISHED_GAME_RESET_MS, () => {
+      if (state.phase === 'playing' && state.round && state.round.stage === 'gameEnd' && onlyBotsArePlaying()) {
+        resetToWaiting(true, 'finished bot game returned to waiting room', { adminEvent: 'game_auto_reset_after_bot_finish' });
         broadcastState();
       }
     });

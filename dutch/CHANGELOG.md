@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.25
+
+- Sync Dutch 1.2.24 source to upstream commit `a5c600f6ac69`.
+
 ## 1.2.24
 
 - Restore Home Assistant share-backed game log storage after the Dutch 1.2.23 source sync.

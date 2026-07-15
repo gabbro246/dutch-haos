@@ -1,31 +1,47 @@
-const express = require('express');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
 const { Server } = require('socket.io');
 const packageInfo = require('./package.json');
+const { createHttpApp } = require('./lib/http-app.js');
+const {
+  PLAYER_NAME_MAX_LENGTH,
+  SUITS,
+  RANKS,
+  SPECIAL_RANKS,
+  logTimestamp: gameLogTimestamp,
+  logEntryTimeMs,
+  logRelativeBaseMs,
+  formatRelativeLogTime,
+  scoreHistoryRows,
+  normalizedShortPlayerName,
+  shortPlayerName,
+  suitSymbol,
+  isRedSuit,
+  cardPoints,
+  specialName
+} = require('./public/shared.js');
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
 const PORT = process.env.PORT || 3000;
 const DISCONNECT_GRACE_MS = 15 * 60 * 1000;
 const WAITING_ROOM_TIMEOUT_MS = 15 * 60 * 1000;
+const GAME_INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
+const JACK_SWAP_SELECTION_MS = 500;
 const ADMIN_LOG_PATH = path.join(__dirname, 'usage.log');
-const GAME_LOG_DIR = process.env.DUTCH_GAME_LOG_DIR || (fs.existsSync('/share') ? '/share/dutch/logs' : path.join(__dirname, 'game-logs'));
+const GAME_LOG_DIR = path.join(__dirname, 'game-logs');
 const APP_VERSION = packageInfo.version;
+const SPECTATOR_TRIGGER_NAME = 'spectator';
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const INDEX_PATH = path.join(PUBLIC_DIR, 'index.html');
+const app = createHttpApp({ indexPath: INDEX_PATH, publicDir: PUBLIC_DIR, appVersion: APP_VERSION });
+const server = http.createServer(app);
+const io = new Server(server);
 
-app.use(express.static('public'));
-
-const SUITS = ['hearts', 'diamonds', 'clubs', 'spades'];
-const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-const SPECIALS = new Set(['A', 'Q', 'J']);
-const RED_SUITS = new Set(['hearts', 'diamonds']);
-
+const SPECIALS = new Set(SPECIAL_RANKS);
 const BOT_PROFILES = {
   strategic: {
-    name: 'Strategic 🤖',
+    name: '🦉 Athena',
     label: 'strategic',
     cautious: 0.92,
     aggressive: 0.46,
@@ -44,8 +60,28 @@ const BOT_PROFILES = {
     unknownOwnPenalty: 2.25,
     knownCardUtility: 1.05
   },
+  roswell: {
+    name: '👽 Roswell',
+    label: 'elite',
+    cautious: 0.98,
+    aggressive: 0.58,
+    forgetful: 0.005,
+    fast: 0.99,
+    slow: 0.01,
+    spiteful: 0.70,
+    opportunistic: 0.99,
+    mistake: 0.001,
+    throwConfidence: 0.56,
+    throwMiss: 0.001,
+    pileMargin: 0.18,
+    swapMargin: -0.28,
+    dutchMargin: 1.25,
+    queenOwnBias: 0.92,
+    unknownOwnPenalty: 2.75,
+    knownCardUtility: 1.35
+  },
   casual: {
-    name: 'Casual 🤖',
+    name: '🐑 Norman',
     label: 'casual',
     cautious: 0.60,
     aggressive: 0.48,
@@ -65,7 +101,7 @@ const BOT_PROFILES = {
     knownCardUtility: 0.60
   },
   distracted: {
-    name: 'Distracted 🤖',
+    name: '🐠 Dory',
     label: 'distracted',
     cautious: 0.38,
     aggressive: 0.50,
@@ -100,13 +136,12 @@ function freshState() {
     gameTarget: 100,
     players: [],
     log: [],
-    gameLog: [],
-    gameStartedAt: null,
-    gameLogSaved: false,
     roundNumber: 0,
     scoreHistory: [],
     round: null,
-    waitingMessage: 'A game is already active. Join after the game ends.'
+    waitingMessage: 'A game is already active. Join after the game ends.',
+    gameStartedAt: null,
+    lastGameActivityAt: null
   };
 }
 
@@ -114,13 +149,15 @@ function publicPlayerCount() {
   return state.players.length;
 }
 
+function markGameActivity() {
+  if (state.phase === 'playing') state.lastGameActivityAt = Date.now();
+}
+
 function addLog(text, kind = 'game') {
   if (!text) return;
+  if (kind === 'game') markGameActivity();
   if (state.round && kind === 'game') state.round.botTick = (state.round.botTick || 0) + 1;
-  const entry = { text, kind, datetime: new Date().toISOString() };
-  state.log.unshift(entry);
-  state.gameLog.push(entry);
-  if (state.log.length > 80) state.log.length = 80;
+  state.log.unshift({ text, kind, at: new Date().toISOString() });
 }
 
 function adminLog(event, data = {}) {
@@ -129,150 +166,80 @@ function adminLog(event, data = {}) {
     event,
     ...data
   };
-  console.log(`[dutch] ${event} ${JSON.stringify(data)}`);
   fs.appendFile(ADMIN_LOG_PATH, JSON.stringify(entry) + '\n', (error) => {
     if (error) console.error('Could not write admin usage log:', error.message);
   });
 }
 
-function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+function gameLogStartDate(fallbackDate = new Date()) {
+  if (!state.gameStartedAt) return fallbackDate;
+  const startedAt = new Date(state.gameStartedAt);
+  return Number.isNaN(startedAt.getTime()) ? fallbackDate : startedAt;
 }
 
-function safeLogFileName(name) {
-  return path.basename(String(name || '')).replace(/[^A-Za-z0-9._-]/g, '');
+function gameLogLineText(entry, index, baseMs) {
+  const line = typeof entry === "string" ? { text: entry, kind: "game" } : entry;
+  const moveNumber = index + 1;
+  const kind = line.kind && line.kind !== "game" ? " [" + line.kind + "]" : "";
+  return formatRelativeLogTime(logEntryTimeMs(line), baseMs) + " " + moveNumber + "." + kind + " " + String(line.text || "");
 }
 
-function localLogTime(entry) {
-  const date = new Date(entry.datetime || Date.now());
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString('sv-SE');
+function scoreHistoryForLog() {
+  return scoreHistoryRows(state.scoreHistory || []);
 }
 
-function gameLogFileName(startedAt = new Date()) {
-  const stamp = new Date(startedAt).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[:]/g, '-');
-  return `dutch-${stamp}.txt`;
+function finishedGameLogText(savedAt, winnerName) {
+  const startedTimestamp = gameLogTimestamp(gameLogStartDate(savedAt));
+  const exportedTimestamp = gameLogTimestamp(savedAt);
+  const title = "Dutch game log " + startedTimestamp;
+  const lines = state.log || [];
+  const relativeBaseMs = logRelativeBaseMs(lines);
+  const orderedLines = lines.slice().reverse();
+  return [
+    title,
+    "Exported: " + exportedTimestamp,
+    "Winner: " + (winnerName || "No one"),
+    "Target: " + state.gameTarget,
+    "Rounds: " + state.roundNumber,
+    "",
+    "Points table:",
+    ...scoreHistoryForLog(),
+    "",
+    "Game log:",
+    ...orderedLines.map((entry, index) => gameLogLineText(entry, index, relativeBaseMs))
+  ].join("\n") + "\n";
 }
 
-function scoreLines() {
-  const rows = state.scoreHistory || [];
-  if (rows.length === 0) return ['No completed rounds.'];
-  const last = rows[rows.length - 1];
-  return last.players
-    .slice()
-    .sort((a, b) => a.total - b.total)
-    .map((player) => `${player.name}: ${player.total} total (${player.roundPoints} this round)`);
-}
-
-function finishedGameLogText(reason = '') {
-  const startedAt = state.gameStartedAt ? new Date(state.gameStartedAt) : null;
-  const endedAt = new Date();
-  const players = activePlayers().map((p) => p.name).join(', ') || 'No active players';
-  const lines = [
-    'Dutch game log',
-    `Started: ${startedAt ? startedAt.toISOString() : 'unknown'}`,
-    `Ended: ${endedAt.toISOString()}`,
-    `Reason: ${reason || 'game ended'}`,
-    `Target: ${state.gameTarget}`,
-    `Players: ${players}`,
-    '',
-    'Final scores:',
-    ...scoreLines(),
-    '',
-    'Events:'
-  ];
-
-  const entries = (state.gameLog || state.log || []).slice();
-  if (entries.length === 0) {
-    lines.push('No events recorded.');
-  } else {
-    for (const entry of entries) {
-      const line = typeof entry === 'string' ? { text: entry, kind: 'game' } : entry;
-      const kind = line.kind === 'system' ? 'system' : 'game';
-      lines.push(`[${localLogTime(line)}] [${kind}] ${line.text}`);
-    }
-  }
-
-  return `${lines.join('\n')}\n`;
-}
-
-function saveFinishedGameLog(reason = 'game ended') {
-  if (state.phase !== 'playing' || state.gameLogSaved || state.log.length === 0) return;
-  state.gameLogSaved = true;
-  const fileName = gameLogFileName(state.gameStartedAt || new Date());
-  const filePath = path.join(GAME_LOG_DIR, fileName);
-  const logText = finishedGameLogText(reason);
-  fs.mkdir(GAME_LOG_DIR, { recursive: true }, (mkdirError) => {
-    if (mkdirError) {
-      console.error('Could not create Dutch game log directory:', mkdirError.message);
+function saveFinishedGameLog(winnerName) {
+  const savedAt = new Date();
+  const timestamp = gameLogTimestamp(gameLogStartDate(savedAt));
+  const filename = "dutch-game-log-" + timestamp + ".txt";
+  const filePath = path.join(GAME_LOG_DIR, filename);
+  const content = finishedGameLogText(savedAt, winnerName);
+  fs.mkdir(GAME_LOG_DIR, { recursive: true }, (dirError) => {
+    if (dirError) {
+      console.error("Could not create game log directory:", dirError.message);
       return;
     }
-    fs.writeFile(filePath, logText, (writeError) => {
-      if (writeError) console.error('Could not write Dutch game log:', writeError.message);
+    fs.writeFile(filePath, content, "utf8", (writeError) => {
+      if (writeError) console.error("Could not write finished game log:", writeError.message);
     });
   });
 }
-
-function htmlPage(title, body) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)}</title>
-  <link rel="stylesheet" href="/styles.css">
-</head>
-<body>
-  ${body}
-</body>
-</html>`;
-}
-
-app.get('/logs', (req, res) => {
-  fs.readdir(GAME_LOG_DIR, { withFileTypes: true }, (error, entries) => {
-    const files = error ? [] : entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.txt'))
-      .map((entry) => entry.name)
-      .sort()
-      .reverse();
-    const list = files.length > 0
-      ? files.map((fileName) => '<li><a href="/logs/' + encodeURIComponent(fileName) + '">' + escapeHtml(fileName) + '</a></li>').join('')
-      : '<li>No saved game logs yet.</li>';
-    const note = error && error.code !== 'ENOENT'
-      ? '<p class="hint">Could not read ' + escapeHtml(GAME_LOG_DIR) + ': ' + escapeHtml(error.message) + '</p>'
-      : '<p class="hint">Saved as text files in ' + escapeHtml(GAME_LOG_DIR) + '.</p>';
-    res.type('html').send(htmlPage('Dutch game logs',
-      '<main class="logs-page">' +
-        '<h1>Dutch game logs</h1>' +
-        note +
-        '<ol class="saved-log-list">' + list + '</ol>' +
-        '<p><a href="/">Back to game</a></p>' +
-      '</main>'
-    ));
-  });
-});
-
-app.get('/logs/:fileName', (req, res) => {
-  const fileName = safeLogFileName(req.params.fileName);
-  if (!fileName || fileName !== req.params.fileName || !fileName.endsWith('.txt')) {
-    res.status(404).type('text').send('Log file not found.\n');
-    return;
-  }
-  res.sendFile(path.join(GAME_LOG_DIR, fileName), (error) => {
-    if (error && !res.headersSent) res.status(error.statusCode || 404).type('text').send('Log file not found.\n');
-  });
-});
 
 function hostAddresses() {
   return Object.values(os.networkInterfaces())
     .flat()
     .filter((address) => address && address.family === 'IPv4' && !address.internal)
     .map((address) => "http://" + address.address + ":" + PORT);
+}
+
+function playerShortNameTaken(name, ignoredId = '', ignoredBotType = '') {
+  const normalized = normalizedShortPlayerName(name);
+  if (!normalized) return false;
+  const reservedByBot = BOT_TYPES.some((type) => type !== ignoredBotType && normalizedShortPlayerName(BOT_PROFILES[type].name) === normalized);
+  if (reservedByBot) return true;
+  return activePlayers().some((player) => player.id !== ignoredId && normalizedShortPlayerName(player.name) === normalized);
 }
 
 function activePlayers() {
@@ -283,16 +250,28 @@ function activePlayerCount() {
   return activePlayers().length;
 }
 
+function activePlayablePlayers() {
+  return activePlayers().filter((p) => !p.isSpectator);
+}
+
+function activePlayablePlayerCount() {
+  return activePlayablePlayers().length;
+}
+
 function activeHumanCount() {
   return activePlayers().filter((p) => !p.isBot).length;
 }
 
 function hasPlayableHumanGame() {
-  return activeHumanCount() >= 1 && activePlayerCount() >= 2;
+  return activeHumanCount() >= 1 && activePlayablePlayerCount() >= 2;
+}
+
+function isSpectatorName(name) {
+  return String(name || '').trim().toLowerCase() === SPECTATOR_TRIGGER_NAME;
 }
 
 function scoreSnapshot() {
-  return activePlayers().map((p) => ({
+  return activePlayablePlayers().map((p) => ({
     name: p.name,
     total: p.total,
     roundPoints: p.roundPoints
@@ -309,7 +288,7 @@ function normalizePlayerToken(value) {
 
 function isActivePlayer(playerId) {
   const player = findPlayer(playerId);
-  return !!(player && !player.left);
+  return !!(player && !player.left && !player.isSpectator);
 }
 
 function isProtectedSpecialTarget(playerId) {
@@ -321,7 +300,7 @@ function findActiveIndexFrom(startIndex) {
   if (state.players.length === 0) return -1;
   for (let offset = 0; offset < state.players.length; offset += 1) {
     const index = (startIndex + offset + state.players.length) % state.players.length;
-    if (state.players[index] && !state.players[index].left) return index;
+    if (state.players[index] && !state.players[index].left && !state.players[index].isSpectator) return index;
   }
   return -1;
 }
@@ -332,11 +311,12 @@ function findPlayer(playerId) {
 
 function currentPlayer() {
   if (!state.round) return null;
-  return state.players[state.round.currentPlayerIndex] || null;
+  const player = state.players[state.round.currentPlayerIndex] || null;
+  return player && !player.isSpectator ? player : null;
 }
 
 function clampDeckSetting() {
-  if (activePlayerCount() > 4) state.deckSetting = 'two';
+  if (activePlayablePlayerCount() > 4) state.deckSetting = 'two';
 }
 
 function createDeck(deckColor) {
@@ -374,29 +354,6 @@ function shuffle(cards) {
   }
   return cards;
 }
-
-function suitSymbol(suit) {
-  return {
-    hearts: '♥',
-    diamonds: '♦',
-    clubs: '♣',
-    spades: '♠'
-  }[suit];
-}
-
-function isRedSuit(suit) {
-  return RED_SUITS.has(suit);
-}
-
-function cardPoints(card) {
-  if (!card) return 0;
-  if (card.rank === 'A') return 1;
-  if (card.rank === 'J') return 11;
-  if (card.rank === 'Q') return 12;
-  if (card.rank === 'K') return isRedSuit(card.suit) ? 0 : 13;
-  return Number(card.rank);
-}
-
 
 function randomBetween(min, max) {
   return min + Math.random() * (max - min);
@@ -454,10 +411,11 @@ function ensureBotMemory(bot) {
       slots: {},
       discards: [],
       pendingPile: null,
-      drawn: null
+      drawn: null,
+      aceAttackers: {}
     };
   }
-  for (const player of activePlayers()) {
+  for (const player of activePlayablePlayers()) {
     if (!bot.botMemory.slots[player.id]) bot.botMemory.slots[player.id] = [];
     const slots = bot.botMemory.slots[player.id];
     while (slots.length < player.cards.length) slots.push(unknownMemory('unknown'));
@@ -530,6 +488,14 @@ function observePileTakeForAllBots(actorId, card) {
   }
 }
 
+function observeAceForAllBots(actorId, targetId) {
+  for (const bot of activeBots()) {
+    const memory = ensureBotMemory(bot);
+    if (!memory || targetId !== bot.id || actorId === bot.id) continue;
+    memory.aceAttackers[actorId] = (memory.aceAttackers[actorId] || 0) + 1;
+  }
+}
+
 function botMemoryEntry(bot, ownerId, index) {
   const memory = ensureBotMemory(bot);
   return memory && memory.slots[ownerId] ? memory.slots[ownerId][index] : unknownMemory();
@@ -577,6 +543,119 @@ function unknownExpectedPoints(bot = null) {
   return remainingCards > 0 ? remainingPoints / remainingCards : 6.4;
 }
 
+function rankStatsForBot(bot, rank) {
+  const decks = state.deckSetting === 'two' ? 2 : 1;
+  const totalRankCards = decks * SUITS.length;
+  const seenBySuit = new Map();
+  const addSeen = (card) => {
+    if (!card || card.rank !== rank || !card.suit) return;
+    seenBySuit.set(card.suit, Math.min(decks, (seenBySuit.get(card.suit) || 0) + 1));
+  };
+  const memory = ensureBotMemory(bot);
+  if (memory) {
+    for (const discard of memory.discards || []) addSeen(discard.card);
+    for (const slots of Object.values(memory.slots || {})) {
+      for (const entry of slots) {
+        const effective = effectiveMemory(bot, entry);
+        if (effective.card) addSeen(effective.card);
+      }
+    }
+  }
+  const seen = Array.from(seenBySuit.values()).reduce((sum, count) => sum + count, 0);
+  return {
+    seen,
+    total: totalRankCards,
+    remaining: Math.max(0, totalRankCards - seen)
+  };
+}
+
+function rankDiscardPressure(bot, rank) {
+  let pressure = 0;
+  for (const player of activePlayablePlayers()) {
+    if (player.id === bot.id || isProtectedSpecialTarget(player.id)) continue;
+    player.cards.forEach((card, index) => {
+      const memory = effectiveMemory(bot, botMemoryEntry(bot, player.id, index));
+      if (!memory.card || memory.card.rank !== rank) return;
+      const points = memory.card.points;
+      pressure += (memory.confidence || 0) * (0.25 + Math.min(1, Math.max(0, points) / 10));
+    });
+  }
+  return pressure;
+}
+
+function throwInPotentialValue(bot, card) {
+  if (!bot || !card || !card.rank) return 0;
+  const stats = rankStatsForBot(bot, card.rank);
+  const remainingRatio = stats.total > 0 ? stats.remaining / stats.total : 0;
+  const pressure = Math.min(1.8, rankDiscardPressure(bot, card.rank));
+  const points = typeof card.points === 'number' ? card.points : cardPoints(card);
+  const cardCountUtility = card.rank === 'K' && card.red ? 0.55 : 0.22;
+  const pointUtility = Math.min(1.25, Math.max(0, points) / 9);
+  return (remainingRatio * 1.2 + pressure * 0.75) * (cardCountUtility + pointUtility);
+}
+
+function discardGiftPenalty(bot, card) {
+  if (!card) return 0;
+  const points = typeof card.points === 'number' ? card.points : cardPoints(card);
+  let penalty = 0;
+  if (card.rank === 'K' && (card.red || isRedSuit(card.suit))) penalty += 2.35;
+  else if (points <= 2) penalty += 0.75;
+  else if (points <= 4) penalty += 0.35;
+  if (SPECIALS.has(card.rank)) penalty += specialActionValue(bot, card) * 0.2;
+  const nextIndex = findActiveIndexFrom((state.round.currentPlayerIndex + 1) % Math.max(1, state.players.length));
+  const next = nextIndex >= 0 ? state.players[nextIndex] : null;
+  if (next && next.id !== bot.id) {
+    const nextEstimate = botExpectedScore(bot, next);
+    if (nextEstimate > 7 && points <= 3) penalty += 0.45;
+  }
+  return penalty;
+}
+
+function cardStrategicCost(bot, card, options = {}) {
+  if (!card) return unknownExpectedPoints(bot);
+  let cost = cardPoints(card);
+  const publicCardView = publicMemoryCard(card) || card;
+  if (card.rank === 'K' && isRedSuit(card.suit)) cost -= 1.15;
+  if (card.rank === 'K' && !isRedSuit(card.suit)) cost += 0.85;
+  if (SPECIALS.has(card.rank)) cost -= specialActionValue(bot, publicCardView) * (options.immediateSpecial ? 0.55 : 0.16);
+  cost -= throwInPotentialValue(bot, publicCardView) * (options.ownCard ? 0.65 : 0.35);
+  return cost;
+}
+
+function botSwapTargets(bot, incomingCard) {
+  const incomingCost = cardStrategicCost(bot, incomingCard, { ownCard: true });
+  const currentRoundScore = botExpectedRoundScore(bot, bot);
+  const incomingRaw = cardPoints(incomingCard);
+  const currentHalvingBonus = totalHalvingBonus(bot, currentRoundScore, { scale: 0.16 });
+  const canTuneHalving = state.round && state.round.dutchCallerId && state.round.dutchCallerId !== bot.id;
+  return botOwnSlots(bot)
+    .map((slot) => {
+      const effective = effectiveMemory(bot, slot.memory);
+      const knownCard = effective.card || null;
+      const currentCost = expectedEntryPoints(bot, slot.memory, { countSpecialUtility: true, ownDecision: true });
+      const currentRaw = expectedEntryRawPoints(bot, slot.memory);
+      const projectedRoundScore = currentRoundScore - currentRaw + incomingRaw;
+      const halvingBonus = canTuneHalving
+        ? totalHalvingBonus(bot, projectedRoundScore, { scale: 0.2 }) - currentHalvingBonus
+        : 0;
+      const giftPenalty = knownCard ? discardGiftPenalty(bot, knownCard) * Math.max(0.35, effective.confidence || 0) : 0;
+      return {
+        ...slot,
+        expected: currentCost,
+        improvement: currentCost - incomingCost - giftPenalty + halvingBonus,
+        confidence: effective.confidence || 0
+      };
+    })
+    .sort((a, b) => b.improvement - a.improvement || b.expected - a.expected);
+}
+
+function botBestSwapTarget(bot, incomingCard) {
+  const targets = botSwapTargets(bot, incomingCard);
+  if (targets.length === 0) return null;
+  if (Math.random() < botProfile(bot).mistake && targets.length > 1) return targets[1];
+  return targets[0];
+}
+
 function knownOwnCardUtility(bot, effective) {
   if (!effective || !effective.card) return 0;
   const profile = botProfile(bot);
@@ -606,6 +685,7 @@ function expectedEntryPoints(bot, entry, options = {}) {
   let known = effective.card.points;
   if (effective.card.rank === 'K' && effective.card.red) known -= 0.7;
   if (effective.card.rank === 'K' && !effective.card.red) known += 0.7;
+  if (options.ownDecision) known -= throwInPotentialValue(bot, effective.card) * 0.65;
   if (options.countSpecialUtility) known -= specialActionValue(bot, effective.card) * 0.35;
   if (options.ownDecision) known -= knownOwnCardUtility(bot, effective);
   return effective.confidence * known + (1 - effective.confidence) * unknown;
@@ -621,6 +701,64 @@ function botExpectedScore(bot, player) {
   return player.cards.reduce((sum, card, index) => sum + expectedEntryPoints(bot, botMemoryEntry(bot, player.id, index), { countSpecialUtility: player.id === bot.id }), 0);
 }
 
+function expectedEntryRawPoints(bot, entry) {
+  const effective = effectiveMemory(bot, entry);
+  const unknown = unknownExpectedPoints(bot);
+  if (!effective.card) return unknown;
+  return (effective.confidence || 0) * effective.card.points + (1 - (effective.confidence || 0)) * unknown;
+}
+
+function botExpectedRoundScore(bot, player) {
+  ensureBotMemory(bot);
+  return player.cards.reduce((sum, card, index) => sum + expectedEntryRawPoints(bot, botMemoryEntry(bot, player.id, index)), 0);
+}
+
+function botRoundScoreConfidence(bot) {
+  const slots = botOwnSlots(bot);
+  if (slots.length === 0) return 1;
+  const total = slots.reduce((sum, slot) => sum + (effectiveMemory(bot, slot.memory).confidence || 0), 0);
+  return total / slots.length;
+}
+
+function totalHalvingBonus(bot, projectedRoundScore, options = {}) {
+  if (!bot || typeof projectedRoundScore !== 'number') return 0;
+  const multiplier = options.multiplier || 1;
+  const profile = botProfile(bot);
+  const projectedTotal = bot.total + projectedRoundScore * multiplier;
+  let best = 0;
+  for (const target of [50, 100]) {
+    if (target <= bot.total) continue;
+    const distance = Math.abs(projectedTotal - target);
+    const tolerance = options.tolerance ?? (0.65 + profile.aggressive * 0.35);
+    if (distance > tolerance) continue;
+    const payoff = target / 2;
+    const saved = Math.max(0, projectedTotal - payoff);
+    best = Math.max(best, saved * (options.scale || 0.22) * (1 - distance / (tolerance + 0.01)));
+  }
+  return best;
+}
+
+function botDeliberateDutchHalving(bot, expectedRoundScore) {
+  const confidence = botRoundScoreConfidence(bot);
+  const profile = botProfile(bot);
+  const risk = botRiskMode(bot);
+  if (confidence < 0.58 + profile.cautious * 0.12) return false;
+  for (const target of [50, 100]) {
+    const needed = target - bot.total;
+    if (needed <= 10 || needed % 2 !== 0) continue;
+    const desiredRaw = needed / 2;
+    if (desiredRaw <= 5) continue;
+    const tolerance = 0.45 + (1 - confidence) * 1.4 + profile.aggressive * 0.25;
+    const distance = Math.abs(expectedRoundScore - desiredRaw);
+    if (distance > tolerance) continue;
+    const doubledTotal = bot.total + desiredRaw * 2;
+    const missWouldLikelyLose = doubledTotal > state.gameTarget && target !== 100;
+    if (missWouldLikelyLose && risk !== 'behind' && profile.aggressive < 0.5) continue;
+    return true;
+  }
+  return false;
+}
+
 function botBestOwnSlot(bot, mode = 'highest') {
   const slots = botOwnSlots(bot).map((slot) => ({ ...slot, expected: expectedEntryPoints(bot, slot.memory, { countSpecialUtility: true, ownDecision: true }) }));
   if (slots.length === 0) return null;
@@ -632,7 +770,7 @@ function botBestOwnSlot(bot, mode = 'highest') {
 function botLowOpponentSlot(bot) {
   const candidates = [];
   const profile = botProfile(bot);
-  for (const player of activePlayers()) {
+  for (const player of activePlayablePlayers()) {
     if (player.id === bot.id || isProtectedSpecialTarget(player.id)) continue;
     player.cards.forEach((card, index) => {
       const memory = botMemoryEntry(bot, player.id, index);
@@ -649,14 +787,14 @@ function botLowOpponentSlot(bot) {
 }
 
 function botOpponentEstimates(bot) {
-  return activePlayers()
+  return activePlayablePlayers()
     .filter((p) => p.id !== bot.id && !isProtectedSpecialTarget(p.id))
     .map((player) => ({ player, expected: botExpectedScore(bot, player), cards: player.cards.length, total: player.total }))
     .sort((a, b) => a.expected - b.expected);
 }
 
 function botRiskMode(bot) {
-  const totals = activePlayers().map((p) => p.total);
+  const totals = activePlayablePlayers().map((p) => p.total);
   const min = Math.min(...totals);
   const max = Math.max(...totals);
   if (bot.total >= max - 3 && bot.total > min + 10) return 'behind';
@@ -669,31 +807,26 @@ function shouldBotTakePile(bot) {
   const top = round && round.discard[round.discard.length - 1];
   if (!top) return false;
   const profile = botProfile(bot);
-  const best = botBestOwnSlot(bot);
+  const best = botBestSwapTarget(bot, top);
   if (!best) return false;
-  let pileValue = cardPoints(top);
-  if (top.rank === 'K' && isRedSuit(top.suit)) pileValue -= 0.8;
-  if (top.rank === 'K' && !isRedSuit(top.suit)) pileValue += 0.8;
-  if (SPECIALS.has(top.rank)) pileValue -= specialActionValue(bot, publicMemoryCard(top)) * 0.22;
-  let margin = best.expected - pileValue;
-  if (botRiskMode(bot) === 'behind') margin += profile.aggressive * 0.8;
-  if (botRiskMode(bot) === 'ahead') margin -= profile.cautious * 0.8;
-  if (Math.random() < profile.mistake) margin += randomBetween(-2.5, 1.2);
+  let margin = best.improvement + discardGiftPenalty(bot, publicMemoryCard(top)) * 0.42;
+  const risk = botRiskMode(bot);
+  if (risk === 'behind') margin += profile.aggressive * 0.85;
+  if (risk === 'ahead') margin -= profile.cautious * 0.65;
+  if (Math.random() < profile.mistake) margin += randomBetween(-2.3, 1.3);
   return margin > profile.pileMargin;
 }
 
 function shouldBotSwapDrawn(bot, drawnCard) {
   const profile = botProfile(bot);
-  const best = botBestOwnSlot(bot);
+  const best = botBestSwapTarget(bot, drawnCard);
   if (!best || !drawnCard) return false;
-  const drawnPoints = cardPoints(drawnCard);
+  let improvement = best.improvement;
   const specialUtility = SPECIALS.has(drawnCard.rank) ? specialActionValue(bot, publicMemoryCard(drawnCard)) : 0;
-  let improvement = best.expected - drawnPoints;
-  if (drawnCard.rank === 'K' && isRedSuit(drawnCard.suit)) improvement += 0.7;
-  if (drawnCard.rank === 'K' && !isRedSuit(drawnCard.suit)) improvement -= 0.9;
-  if (SPECIALS.has(drawnCard.rank) && specialUtility > drawnPoints * 0.25 && Math.random() < profile.opportunistic) improvement -= specialUtility * 0.45;
-  if (best.expected < 2.5 && drawnPoints > best.expected) improvement -= profile.cautious * 1.2;
-  if (Math.random() < profile.mistake) improvement += randomBetween(-2.5, 2.2);
+  if (SPECIALS.has(drawnCard.rank)) improvement -= specialUtility * (0.42 + profile.opportunistic * 0.18);
+  if (best.expected < 2.5 && cardPoints(drawnCard) > best.expected) improvement -= profile.cautious * 1.05;
+  if (botRiskMode(bot) === 'behind') improvement += profile.aggressive * 0.35;
+  if (Math.random() < profile.mistake) improvement += randomBetween(-2.4, 2.0);
   return improvement > profile.swapMargin;
 }
 
@@ -714,6 +847,11 @@ function botReactionDelay(bot, confidence) {
 
 function botScheduleKey(parts) {
   return parts.join(':');
+}
+
+function onlyBotsArePlaying() {
+  const players = activePlayablePlayers();
+  return players.length >= 2 && players.every((p) => p.isBot);
 }
 
 function scheduleBotTimer(key, delay, fn) {
@@ -751,6 +889,14 @@ function drawFromDeck() {
   return state.round.deck.pop();
 }
 
+function discardLogText(actorId, card, reason = "") {
+  const action = reason
+    ? (reason.includes("{card}") ? reason.replace(/\{card\}/g, label(card)) : `${reason} ${label(card)}`)
+    : `placed ${label(card)}`;
+  const special = SPECIALS.has(card.rank) ? ` and may use ${specialName(card.rank)}` : "";
+  return `${nameOf(actorId)} ${action}${special}`;
+}
+
 function pushDiscard(card, actorId, reason, options = {}) {
   const round = state.round;
   if (!round || !card) return;
@@ -768,10 +914,8 @@ function pushDiscard(card, actorId, reason, options = {}) {
   }
   if (SPECIALS.has(card.rank)) {
     round.specialQueue.push({ type: card.rank, actorId, selected: [] });
-    addLog(`${nameOf(actorId)} placed ${label(card)} and may use ${specialName(card.rank)}`);
-  } else if (reason) {
-    addLog(`${nameOf(actorId)} ${reason} ${label(card)}`);
   }
+  if (reason || SPECIALS.has(card.rank)) addLog(discardLogText(actorId, card, reason));
   updateStageAfterQueue();
 }
 
@@ -798,31 +942,116 @@ function topSpecial() {
   return state.round.specialQueue[0] || null;
 }
 
+function isJackSwapSelectionActive(special = topSpecial()) {
+  return !!(special && special.type === 'J' && (special.resolving || (special.selected || []).length > 0));
+}
+
+function isJackSwapInProgress() {
+  const round = state.round;
+  return !!(round && round.stage === 'special' && isJackSwapSelectionActive());
+}
+
+function activeJackSpecialFor(actorId) {
+  const round = state.round;
+  const special = topSpecial();
+  if (!round || round.stage !== 'special' || !special || special.type !== 'J' || special.actorId !== actorId) return null;
+  return special;
+}
+
+function sameSelectedCards(a, b) {
+  return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((cardId, index) => cardId === b[index]);
+}
+
+function completeJackSwap(actorId, selectedIds) {
+  const special = activeJackSpecialFor(actorId);
+  if (!special || !sameSelectedCards(special.selected, selectedIds)) return;
+
+  const a = playerByCardId(selectedIds[0]);
+  const b = playerByCardId(selectedIds[1]);
+  if (a && b && !isProtectedSpecialTarget(a.player.id) && !isProtectedSpecialTarget(b.player.id) && a.card.id !== b.card.id) {
+    [a.player.cards[a.index], b.player.cards[b.index]] = [b.player.cards[b.index], a.player.cards[a.index]];
+    moveSlotMemoryForAllBots(a.player.id, a.index, b.player.id, b.index, 'Jack swap');
+    addLog(nameOf(actorId) + ' used Jack swap');
+  }
+
+  finishSpecial();
+  broadcastState();
+}
+
+function beginJackSwapResolution(actorId, selectedIds, delay = JACK_SWAP_SELECTION_MS) {
+  const special = activeJackSpecialFor(actorId);
+  const selected = (selectedIds || (special && special.selected) || []).slice(0, 2);
+  if (!special || selected.length < 2) return;
+  special.selected = selected;
+  special.resolving = true;
+  broadcastState();
+  setTimeout(() => completeJackSwap(actorId, selected), delay);
+}
+
+function beginBotJackSwapSelection(actorId, firstCardId, secondCardId) {
+  const special = activeJackSpecialFor(actorId);
+  if (!special || !firstCardId || !secondCardId || firstCardId === secondCardId) return false;
+  special.selected = [firstCardId];
+  special.resolving = true;
+  broadcastState();
+  setTimeout(() => {
+    const active = activeJackSpecialFor(actorId);
+    if (!active || !sameSelectedCards(active.selected, [firstCardId])) return;
+    beginJackSwapResolution(actorId, [firstCardId, secondCardId]);
+  }, JACK_SWAP_SELECTION_MS);
+  return true;
+}
+
 function canPlayerSayDutch(playerId) {
   const round = state.round;
-  if (!round || round.dutchCallerId || !round.turnComplete) return false;
+  const player = findPlayer(playerId);
+  if (!round || !player || player.left || player.isSpectator || round.dutchCallerId) return false;
   const cp = currentPlayer();
+  const noCards = player.cards.length === 0;
+  if (noCards && !round.drawn) {
+    if (!cp || cp.id !== playerId) return false;
+    if (round.stage === 'turn') return true;
+    const special = topSpecial();
+    return !!(round.stage === 'special' && special && special.actorId === playerId && !isJackSwapSelectionActive(special));
+  }
+  if (!round.turnComplete) return false;
   if (!cp || cp.id !== playerId) return false;
   if (round.stage === 'turn') return true;
   const special = topSpecial();
-  return !!(round.stage === 'special' && special && special.actorId === playerId);
+  return !!(round.stage === 'special' && special && special.actorId === playerId && !isJackSwapSelectionActive(special));
+}
+
+function mustPlayerSayDutch(playerId) {
+  const player = findPlayer(playerId);
+  return !!(player && player.cards.length === 0 && canPlayerSayDutch(playerId));
 }
 
 function setDutchCaller(player) {
   const round = state.round;
   if (!round || !player) return;
   round.dutchCallerId = player.id;
+  const callerIndex = state.players.findIndex((p) => p.id === player.id);
+  const startIndex = callerIndex >= 0 ? callerIndex : round.currentPlayerIndex;
   const ordered = [];
   for (let i = 1; i < state.players.length; i += 1) {
-    const p = state.players[(round.currentPlayerIndex + i) % state.players.length];
-    if (!p.left && p.id !== player.id) ordered.push(p.id);
+    const p = state.players[(startIndex + i) % state.players.length];
+    if (!p.left && !p.isSpectator && p.id !== player.id) ordered.push(p.id);
   }
   round.dutchQueue = ordered;
   addLog(`${player.name} said Dutch`);
 }
 
-function specialName(rank) {
-  return rank === 'A' ? 'Ace' : rank === 'Q' ? 'Queen' : 'Jack';
+function callDutchForPlayer(player) {
+  const round = state.round;
+  const special = topSpecial();
+  if (!round || !player || !canPlayerSayDutch(player.id)) return false;
+  if (round.stage === 'special' && special && special.actorId === player.id) {
+    addLog(`${player.name} skipped ${specialName(special.type)}`);
+    finishSpecial();
+  }
+  setDutchCaller(player);
+  advanceTurn();
+  return true;
 }
 
 function label(card) {
@@ -851,15 +1080,37 @@ function removeExpiredReveals() {
   if (!state.round) return;
   const now = Date.now();
   state.round.reveals = state.round.reveals.filter((r) => r.until > now);
+  if (state.round.pileHighlight && state.round.pileHighlight.until <= now) state.round.pileHighlight = null;
+}
+function scheduleRevealCleanup(ms) {
+  setTimeout(() => {
+    removeExpiredReveals();
+    broadcastState();
+  }, ms + 50);
 }
 
 function revealCardTo(playerId, cardId, ms = 3000) {
   if (!state.round) return;
   state.round.reveals.push({ viewerId: playerId, cardId, until: Date.now() + ms });
-  setTimeout(() => {
-    removeExpiredReveals();
-    broadcastState();
-  }, ms + 50);
+  scheduleRevealCleanup(ms);
+}
+
+function highlightCardForAll(cardId, kind = 'peek', ms = 3000, options = {}) {
+  if (!state.round || !cardId) return;
+  state.round.reveals.push({
+    public: true,
+    kind,
+    cardId,
+    exceptViewerId: options.exceptViewerId || '',
+    until: Date.now() + ms
+  });
+  scheduleRevealCleanup(ms);
+}
+
+function highlightPileForAll(kind = 'event', ms = 3000) {
+  if (!state.round) return;
+  state.round.pileHighlight = { kind, until: Date.now() + ms };
+  scheduleRevealCleanup(ms);
 }
 
 function canViewerSeeCard(viewerId, ownerId, card) {
@@ -867,7 +1118,19 @@ function canViewerSeeCard(viewerId, ownerId, card) {
   if (!round) return false;
   if (round.stage === 'roundEnd' || round.stage === 'gameEnd') return true;
   if (round.drawn && round.drawn.card.id === card.id && round.drawn.playerId === viewerId) return true;
-  return round.reveals.some((r) => r.viewerId === viewerId && r.cardId === card.id && r.until > Date.now());
+  return round.reveals.some((r) => !r.public && r.viewerId === viewerId && r.cardId === card.id && r.until > Date.now());
+}
+
+function cardHighlight(cardId, viewerId = '') {
+  const round = state.round;
+  if (!round || !cardId) return '';
+  const active = round.reveals.find((r) => (
+    r.public &&
+    r.cardId === cardId &&
+    r.until > Date.now() &&
+    r.exceptViewerId !== viewerId
+  ));
+  return active ? String(active.kind || 'peek') : '';
 }
 
 function publicCard(card, visible) {
@@ -901,10 +1164,11 @@ function buildView(playerId) {
     version: APP_VERSION,
     deckSetting: state.deckSetting,
     gameTarget: state.gameTarget,
-    oneDeckDisabled: activePlayerCount() > 4,
+    oneDeckDisabled: activePlayablePlayerCount() > 4,
     canJoin: state.phase === 'waiting' && activePlayerCount() < 9 && !joined,
     canStart: state.phase === 'waiting' && hasPlayableHumanGame(),
     waitingMessage: state.phase === 'playing' && !joined ? state.waitingMessage : '',
+    gameStartedAt: state.gameStartedAt,
     players: activePlayers().map((p) => ({
       id: p.id,
       name: p.name,
@@ -913,6 +1177,7 @@ function buildView(playerId) {
       connected: p.connected,
       isBot: !!p.isBot,
       botType: p.botType || '',
+      isSpectator: !!p.isSpectator,
       joinedAt: p.joinedAt || null,
       startPeekCount: p.startPeekedCardIds ? p.startPeekedCardIds.length : 0,
       startPeekDone: !!p.startPeekDone,
@@ -940,10 +1205,11 @@ function buildView(playerId) {
     deckCount: round.deck.length,
     discardCount: round.discard.length,
     discardTop: publicCard(round.discard[round.discard.length - 1], true),
+    pileHighlight: round.pileHighlight && round.pileHighlight.until > Date.now() ? String(round.pileHighlight.kind || 'event') : '',
     deckBack: state.deckSetting === 'one' ? (state.deckColor || 'blue') : 'mixed',
     drawn: round.drawn ? {
       source: round.drawn.source,
-      card: publicCard(round.drawn.card, round.drawn.playerId === playerId)
+      card: publicCard(round.drawn.card, round.drawn.playerId === playerId || round.drawn.source === 'pile')
     } : null,
     anyDrawn: !!round.drawn,
     turnComplete: !!round.turnComplete,
@@ -968,10 +1234,12 @@ function buildView(playerId) {
       connected: p.connected,
       isBot: !!p.isBot,
       botType: p.botType || '',
+      isSpectator: !!p.isSpectator,
       isCurrent: !['peek', 'roundEnd', 'gameEnd'].includes(round.stage) && cp && cp.id === p.id,
-      finalTurnDone: !!(round.dutchCallerId && !['roundEnd', 'gameEnd'].includes(round.stage) && p.id !== round.dutchCallerId && !pendingDutchIds.has(p.id) && (!cp || cp.id !== p.id || round.turnComplete)),
+      finalTurnDone: !!(!p.isSpectator && round.dutchCallerId && !['roundEnd', 'gameEnd'].includes(round.stage) && p.id !== round.dutchCallerId && !pendingDutchIds.has(p.id) && (!cp || cp.id !== p.id || round.turnComplete)),
       cards: p.cards.map((card) => {
         const view = publicCard(card, canViewerSeeCard(playerId, p.id, card));
+        if (view) view.highlight = cardHighlight(card.id, playerId);
         if (view && p.id === playerId && p.startPeekedCardIds && p.startPeekedCardIds.includes(card.id)) view.startPeeked = true;
         return view;
       })
@@ -984,23 +1252,26 @@ function buildView(playerId) {
 function controlsFor(playerId) {
   const round = state.round;
   const player = findPlayer(playerId);
-  if (!round || !player || player.left) return {};
+  if (!round || !player || player.left || player.isSpectator) return {};
   const cp = currentPlayer();
   const isCurrent = cp && cp.id === playerId;
   const special = topSpecial();
   const actorForSpecial = special && special.actorId === playerId;
-  const beforeDraw = round.stage === 'turn' && isCurrent && !round.drawn && !round.turnComplete && !special;
+  const mustDutch = mustPlayerSayDutch(playerId);
+  const jackSwapInProgress = isJackSwapInProgress();
+  const jackSwapSelectionActive = isJackSwapSelectionActive(special);
+  const beforeDraw = round.stage === 'turn' && isCurrent && !round.drawn && !round.turnComplete && !special && !mustDutch;
   return {
     canPeekStart: round.stage === 'peek' && !player.startPeekDone,
     canTake: beforeDraw,
-    canDiscardDrawn: round.stage === 'turn' && isCurrent && round.drawn && round.drawn.source === 'deck',
-    canSwapDrawn: round.stage === 'turn' && isCurrent && !!round.drawn,
-    canThrowIn: !!(round.throwIn && round.throwIn.open) && round.stage !== 'roundEnd' && round.stage !== 'gameEnd',
-    canQueenPeek: round.stage === 'special' && actorForSpecial && special.type === 'Q',
-    canJackSwap: round.stage === 'special' && actorForSpecial && special.type === 'J',
-    canAceAdd: round.stage === 'special' && actorForSpecial && special.type === 'A',
+    canDiscardDrawn: round.stage === 'turn' && isCurrent && round.drawn && round.drawn.source === 'deck' && !mustDutch,
+    canSwapDrawn: round.stage === 'turn' && isCurrent && !!round.drawn && !mustDutch,
+    canThrowIn: !!(round.throwIn && round.throwIn.open) && round.stage !== 'roundEnd' && round.stage !== 'gameEnd' && !jackSwapInProgress,
+    canQueenPeek: round.stage === 'special' && actorForSpecial && special.type === 'Q' && !mustDutch,
+    canJackSwap: round.stage === 'special' && actorForSpecial && special.type === 'J' && !mustDutch && !special.resolving && (special.selected || []).length < 2,
+    canAceAdd: round.stage === 'special' && actorForSpecial && special.type === 'A' && !mustDutch,
     canDutch: canPlayerSayDutch(playerId),
-    canEndTurn: (round.stage === 'turn' && isCurrent && round.turnComplete) || (round.stage === 'special' && actorForSpecial),
+    canEndTurn: !mustDutch && ((round.stage === 'turn' && isCurrent && round.turnComplete) || (round.stage === 'special' && actorForSpecial && !jackSwapSelectionActive)),
     canNextRound: round.stage === 'roundEnd',
     canNewGame: round.stage === 'gameEnd'
   };
@@ -1029,14 +1300,25 @@ function scheduleBotAutomation() {
   const special = topSpecial();
   if (round.stage === 'special' && special) {
     const actor = findPlayer(special.actorId);
-    if (actor && actor.isBot) {
+    if (actor && actor.isBot && !isJackSwapSelectionActive(special)) {
       scheduleBotTimer(botScheduleKey(['special', state.roundNumber, special.type, actor.id, round.specialQueue.length]), randomBetween(650, 1800), () => botResolveSpecial(actor.id));
     }
   }
 
+  if (round.stage === 'roundEnd' && onlyBotsArePlaying()) {
+    scheduleBotTimer(botScheduleKey(['nextRound', state.roundNumber]), randomBetween(1400, 2600), () => {
+      if (state.phase === 'playing' && state.round && state.round.stage === 'roundEnd' && onlyBotsArePlaying()) {
+        nextRound();
+        broadcastState();
+      }
+    });
+  }
+
   const current = currentPlayer();
   if (round.stage === 'turn' && current && current.isBot) {
-    if (!round.drawn && !round.turnComplete && !special) {
+    if (mustPlayerSayDutch(current.id)) {
+      scheduleBotTimer(botScheduleKey(['dutch', state.roundNumber, current.id, round.botTick || 0]), randomBetween(650, 1200), () => botEndTurn(current.id));
+    } else if (!round.drawn && !round.turnComplete && !special) {
       scheduleBotTimer(botScheduleKey(['turn', state.roundNumber, current.id, round.botTick || 0]), randomBetween(700, 1800), () => botTakeTurnAction(current.id));
     } else if (round.drawn && round.drawn.playerId === current.id) {
       scheduleBotTimer(botScheduleKey(['drawn', state.roundNumber, current.id, round.drawn.card.id]), randomBetween(650, 1700), () => botResolveDrawn(current.id));
@@ -1050,7 +1332,7 @@ function scheduleBotAutomation() {
 
 function scheduleBotThrowIns() {
   const round = state.round;
-  if (!round || !round.throwIn || !round.throwIn.open) return;
+  if (!round || !round.throwIn || !round.throwIn.open || isJackSwapInProgress()) return;
   for (const bot of activeBots()) {
     const candidate = botThrowInCandidate(bot);
     if (!candidate) continue;
@@ -1070,6 +1352,7 @@ function botDoStartPeek(botId) {
     if (!card) continue;
     bot.startPeekedCardIds.push(card.id);
     rememberSlotForBot(bot, bot.id, index, card, 'start peek', 0.96);
+    highlightCardForAll(card.id, 'peek', 3000, { exceptViewerId: bot.id });
   }
   bot.startPeekDone = true;
   addLog(`${bot.name} finished start peek`);
@@ -1081,33 +1364,32 @@ function botTakeTurnAction(botId) {
   const bot = findPlayer(botId);
   const round = state.round;
   if (!bot || !bot.isBot || !round || round.stage !== 'turn') return;
-  if (currentPlayer()?.id !== bot.id || round.drawn || round.turnComplete || topSpecial()) return;
+  if (currentPlayer()?.id !== bot.id || round.drawn || round.turnComplete || topSpecial() || mustPlayerSayDutch(bot.id)) return;
   if (shouldBotTakePile(bot)) botTakePile(bot);
   else botTakeDeck(bot);
 }
 
 function botTakeDeck(bot) {
   const round = state.round;
+  if (!round || mustPlayerSayDutch(bot.id)) return;
   closeThrowInBecauseOfPlayingAction();
   const card = drawFromDeck();
   if (!card) return;
   round.drawn = { playerId: bot.id, source: 'deck', card };
   const memory = ensureBotMemory(bot);
   if (memory) memory.drawn = cardMemory(card, 'deck draw', 1);
-  addLog(`${bot.name} drew from deck`);
   broadcastState();
 }
 
 function botTakePile(bot) {
   const round = state.round;
-  if (!round || round.discard.length === 0) return;
+  if (!round || round.discard.length === 0 || mustPlayerSayDutch(bot.id)) return;
   closeThrowInBecauseOfPlayingAction();
   const card = round.discard.pop();
   round.drawn = { playerId: bot.id, source: 'pile', card };
   observePileTakeForAllBots(bot.id, card);
   const memory = ensureBotMemory(bot);
   if (memory) memory.drawn = cardMemory(card, 'pile observation', 1);
-  addLog(`${bot.name} took pile`);
   broadcastState();
 }
 
@@ -1116,7 +1398,7 @@ function botResolveDrawn(botId) {
   const round = state.round;
   if (!bot || !bot.isBot || !round || currentPlayer()?.id !== bot.id || !round.drawn) return;
   const drawn = round.drawn.card;
-  const best = botBestOwnSlot(bot);
+  const best = botBestSwapTarget(bot, drawn);
   if (!best) return;
   if (round.drawn.source === 'pile' || shouldBotSwapDrawn(bot, drawn)) botSwapDrawn(bot, best.index);
   else botDiscardDrawn(bot);
@@ -1131,7 +1413,7 @@ function botDiscardDrawn(bot) {
   const memory = ensureBotMemory(bot);
   if (memory) memory.drawn = null;
   observeDiscardForAllBots(card, 'discarded', bot.id);
-  pushDiscard(card, bot.id, 'discarded');
+  pushDiscard(card, bot.id, 'drew {card} from deck but discarded it');
   broadcastState();
 }
 
@@ -1143,6 +1425,7 @@ function botSwapDrawn(bot, index) {
   const newCard = round.drawn.card;
   const source = round.drawn.source;
   bot.cards[index] = newCard;
+  highlightCardForAll(newCard.id, 'event', 3000);
   round.drawn = null;
   round.turnComplete = true;
   const memory = ensureBotMemory(bot);
@@ -1155,7 +1438,7 @@ function botSwapDrawn(bot, index) {
     rememberSlotForBot(bot, bot.id, index, newCard, 'deck draw', 1);
   }
   observeDiscardForAllBots(oldCard, 'swap discard', bot.id);
-  pushDiscard(oldCard, bot.id, source === 'pile' ? 'replaced with pile card and discarded' : 'replaced a card and discarded');
+  pushDiscard(oldCard, bot.id, source === 'pile' ? `drew ${label(newCard)} from pile and discarded {card}` : 'drew from deck and discarded {card}');
   broadcastState();
 }
 
@@ -1179,17 +1462,36 @@ function botSkipSpecial(bot) {
   broadcastState();
 }
 
+function botAceTargetScore(bot, estimate) {
+  const memory = ensureBotMemory(bot);
+  const profile = botProfile(bot);
+  const player = estimate.player;
+  const tableTotals = activePlayablePlayers().map((p) => p.total);
+  const bestTotal = Math.min(...tableTotals);
+  const scoreThreat = Math.max(0, 10 - estimate.expected) * 1.15;
+  const cardCountThreat = Math.max(0, 5 - player.cards.length) * 1.2;
+  const standingsThreat = Math.max(0, bot.total - player.total + 8) * 0.08 + Math.max(0, bestTotal + 5 - player.total) * 0.06;
+  const revenge = memory && memory.aceAttackers ? (memory.aceAttackers[player.id] || 0) * (0.8 + profile.spiteful * 0.9) : 0;
+  const finalTurnThreat = state.round && state.round.dutchQueue && state.round.dutchQueue.includes(player.id) ? 0.9 : 0;
+  return scoreThreat + cardCountThreat + standingsThreat + revenge + finalTurnThreat;
+}
+
 function botUseAce(bot) {
   const round = state.round;
   const targets = botOpponentEstimates(bot).filter((entry) => entry.player.id !== round.dutchCallerId);
   if (targets.length === 0) return botSkipSpecial(bot);
-  let target = targets[0];
-  if (botProfile(bot).spiteful > 0.4) target = targets.slice().sort((a, b) => a.total - b.total || a.expected - b.expected)[0];
-  if (target.expected > unknownExpectedPoints(bot) * Math.max(2, target.player.cards.length - 1) && Math.random() > botProfile(bot).aggressive) return botSkipSpecial(bot);
+  const scoredTargets = targets
+    .map((entry) => ({ ...entry, aceScore: botAceTargetScore(bot, entry) }))
+    .sort((a, b) => b.aceScore - a.aceScore || a.expected - b.expected || a.cards - b.cards);
+  const target = scoredTargets[0];
+  const unknown = unknownExpectedPoints(bot);
+  if (target.aceScore < 1.6 && target.expected > unknown * Math.max(1.7, target.player.cards.length - 1) && Math.random() > botProfile(bot).aggressive) return botSkipSpecial(bot);
   const card = drawFromDeck();
   if (card) {
     target.player.cards.push(card);
+    highlightCardForAll(card.id, 'event', 3000);
     addUnknownSlotForAllBots(target.player.id, 'Ace');
+    observeAceForAllBots(bot.id, target.player.id);
     addLog(`${bot.name} gave a card to ${target.player.name}`);
   }
   finishSpecial();
@@ -1224,8 +1526,13 @@ function botQueenTargets(bot) {
 function botUseQueen(bot) {
   const targets = botQueenTargets(bot);
   const profile = botProfile(bot);
+  const ownScore = botExpectedScore(bot, bot);
   let target = null;
-  if (targets.ownUnknown.length > 0 && (state.roundNumber <= 1 || Math.random() < profile.queenOwnBias)) {
+  const ownNeed = targets.ownUnknown.length * (0.85 + profile.cautious * 0.6) + Math.max(0, ownScore - 5) * 0.16;
+  const opponentNeed = targets.opponentUnknown.length > 0
+    ? Math.max(0, 8 - targets.opponentUnknown[0].estimate) * 0.22 + Math.max(0, 4 - targets.opponentUnknown[0].player.cards.length) * 0.25
+    : 0;
+  if (targets.ownUnknown.length > 0 && (ownNeed >= opponentNeed || Math.random() < profile.queenOwnBias)) {
     target = targets.ownUnknown[0];
   } else if (targets.opponentUnknown.length > 0) {
     target = targets.opponentUnknown[0];
@@ -1236,48 +1543,122 @@ function botUseQueen(bot) {
   const card = target.player.cards[target.index];
   if (!card) return botSkipSpecial(bot);
   rememberSlotForBot(bot, target.player.id, target.index, card, 'Queen peek', 0.96);
-  addLog(`${bot.name} used Queen peek`);
+  highlightCardForAll(card.id, 'peek', 3000, { exceptViewerId: bot.id });
+  addLog(bot.name + ' used Queen peek');
   finishSpecial();
   broadcastState();
+}
+
+function botJackCandidates(bot) {
+  const candidates = [];
+  const botScore = botExpectedScore(bot, bot);
+  const ownSlots = botOwnSlots(bot).map((slot) => {
+    const effective = effectiveMemory(bot, slot.memory);
+    return {
+      player: bot,
+      index: slot.index,
+      card: slot.card,
+      expected: expectedEntryPoints(bot, slot.memory, { ownDecision: true }),
+      confidence: effective.confidence || 0
+    };
+  });
+  const opponentSlots = [];
+  for (const player of activePlayablePlayers()) {
+    if (player.id === bot.id || isProtectedSpecialTarget(player.id)) continue;
+    const playerExpected = botExpectedScore(bot, player);
+    player.cards.forEach((card, index) => {
+      const memory = botMemoryEntry(bot, player.id, index);
+      const effective = effectiveMemory(bot, memory);
+      if (!effective.card) return;
+      opponentSlots.push({
+        player,
+        index,
+        card,
+        expected: expectedEntryPoints(bot, memory),
+        confidence: effective.confidence || 0,
+        playerExpected
+      });
+    });
+  }
+
+  for (const own of ownSlots) {
+    for (const opp of opponentSlots) {
+      const threatBonus = Math.max(0, botScore + 2 - opp.playerExpected) * 0.18 + Math.max(0, 4 - opp.player.cards.length) * 0.18;
+      const utility = own.expected - opp.expected + threatBonus - Math.max(0, 0.58 - opp.confidence);
+      if (utility > 0) candidates.push({ type: 'self', a: own, b: opp, utility });
+    }
+  }
+
+  for (const threat of opponentSlots) {
+    if (threat.playerExpected > botScore + 3 && threat.player.total >= bot.total - 4) continue;
+    for (const donor of opponentSlots) {
+      if (donor.player.id === threat.player.id) continue;
+      const diff = donor.expected - threat.expected;
+      if (diff <= 0) continue;
+      const threatPriority = Math.max(0, botScore + 3 - threat.playerExpected) * 0.28 + Math.max(0, 4 - threat.player.cards.length) * 0.25 + Math.max(0, bot.total - threat.player.total + 6) * 0.04;
+      const donorCost = Math.max(0, botScore - donor.playerExpected) * 0.12;
+      const utility = diff * 0.58 + threatPriority - donorCost - Math.max(0, 0.62 - Math.min(threat.confidence, donor.confidence));
+      if (utility > 0) candidates.push({ type: 'sabotage', a: threat, b: donor, utility });
+    }
+  }
+
+  return candidates.sort((a, b) => b.utility - a.utility);
 }
 
 function botUseJack(bot) {
-  const ownHigh = botOwnSlots(bot)
-    .map((slot) => ({ ...slot, expected: expectedEntryPoints(bot, slot.memory, { ownDecision: true }) }))
-    .sort((a, b) => b.expected - a.expected)[0];
-  const lowOpponent = botLowOpponentSlot(bot);
-  if (!ownHigh || !lowOpponent) return botSkipSpecial(bot);
-  const improvement = ownHigh.expected - lowOpponent.expected;
   const profile = botProfile(bot);
-  const requiredImprovement = 1.9 - profile.opportunistic * 0.75 + Math.max(0, 0.62 - lowOpponent.confidence);
-  if (improvement < requiredImprovement && Math.random() > profile.aggressive) return botSkipSpecial(bot);
-  const a = { player: bot, index: ownHigh.index, card: bot.cards[ownHigh.index] };
-  const b = { player: lowOpponent.player, index: lowOpponent.index, card: lowOpponent.player.cards[lowOpponent.index] };
-  if (!a.card || !b.card || isProtectedSpecialTarget(b.player.id)) return botSkipSpecial(bot);
-  [a.player.cards[a.index], b.player.cards[b.index]] = [b.player.cards[b.index], a.player.cards[a.index]];
-  moveSlotMemoryForAllBots(a.player.id, a.index, b.player.id, b.index, 'Jack swap');
-  addLog(`${bot.name} used Jack swap`);
-  finishSpecial();
-  broadcastState();
+  const candidates = botJackCandidates(bot);
+  if (candidates.length === 0) return botSkipSpecial(bot);
+  const candidate = candidates[0];
+  const requiredImprovement = candidate.type === 'self'
+    ? 1.75 - profile.opportunistic * 0.7
+    : 1.25 - profile.spiteful * 0.55 - profile.opportunistic * 0.25;
+  if (candidate.utility < requiredImprovement && Math.random() > profile.aggressive) return botSkipSpecial(bot);
+  const a = { player: candidate.a.player, index: candidate.a.index, card: candidate.a.player.cards[candidate.a.index] };
+  const b = { player: candidate.b.player, index: candidate.b.index, card: candidate.b.player.cards[candidate.b.index] };
+  if (!a.card || !b.card || a.card.id === b.card.id || isProtectedSpecialTarget(a.player.id) || isProtectedSpecialTarget(b.player.id)) return botSkipSpecial(bot);
+  if (!beginBotJackSwapSelection(bot.id, a.card.id, b.card.id)) return botSkipSpecial(bot);
+}
+
+function estimatedTurnImprovement(bot, player) {
+  const slots = player.cards.map((card, index) => ({
+    expected: expectedEntryPoints(bot, botMemoryEntry(bot, player.id, index), { ownDecision: player.id === bot.id }),
+    memory: effectiveMemory(bot, botMemoryEntry(bot, player.id, index))
+  }));
+  if (slots.length === 0) return 0;
+  const highest = slots.sort((a, b) => b.expected - a.expected)[0];
+  const unknown = unknownExpectedPoints(bot);
+  const drawImprovement = Math.max(0, highest.expected - unknown) * 0.42;
+  const top = state.round && state.round.discard[state.round.discard.length - 1];
+  const pileImprovement = top ? Math.max(0, highest.expected - cardStrategicCost(bot, top, { ownCard: true })) * 0.65 : 0;
+  const knowledgePenalty = slots.filter((slot) => !slot.memory.card).length * 0.18;
+  return Math.max(0, Math.max(drawImprovement, pileImprovement) - knowledgePenalty);
 }
 
 function botShouldCallDutch(bot) {
-  const expected = botExpectedScore(bot, bot);
+  const expected = botExpectedRoundScore(bot, bot);
   const profile = botProfile(bot);
-  const opponents = botOpponentEstimates(bot);
+  const opponents = activePlayablePlayers()
+    .filter((p) => p.id !== bot.id && !isProtectedSpecialTarget(p.id))
+    .map((player) => ({ player, expected: botExpectedRoundScore(bot, player), cards: player.cards.length, total: player.total }))
+    .sort((a, b) => a.expected - b.expected);
   const bestOpponent = opponents[0] || null;
-  const likelyLower = opponents.some((entry) => entry.expected < expected - 0.5);
   const unknownOwn = botOwnSlots(bot).filter((slot) => !effectiveMemory(bot, slot.memory).card).length;
+  const projectedLower = opponents.some((entry) => entry.expected - estimatedTurnImprovement(bot, entry.player) < expected - 0.35);
+  const alreadyLower = opponents.some((entry) => entry.expected < expected - 0.45);
+  if (botDeliberateDutchHalving(bot, expected)) return true;
   const risk = botRiskMode(bot);
   let threshold = 5 - profile.cautious * 0.55 + profile.aggressive * 0.35 + profile.dutchMargin;
   if (state.gameTarget === 50) threshold -= 0.2;
   if (risk === 'behind') threshold += 0.35 + profile.aggressive * 0.35;
   if (risk === 'ahead') threshold -= 0.35 + profile.cautious * 0.25;
-  if (unknownOwn === 0) threshold += 0.25 + profile.cautious * 0.25;
-  else threshold -= unknownOwn * (0.35 + profile.cautious * 0.18);
-  if (bestOpponent && expected < bestOpponent.expected - 1.5) threshold += profile.cautious * 0.35;
-  if (likelyLower) threshold -= 1.2 + profile.cautious * 0.8;
-  const cap = unknownOwn === 0 ? 5.35 + (risk === 'behind' ? 0.25 : 0) : 5 - unknownOwn * 0.22;
+  if (unknownOwn === 0) threshold += 0.28 + profile.cautious * 0.28;
+  else threshold -= unknownOwn * (0.45 + profile.cautious * 0.23);
+  if (bestOpponent && expected < bestOpponent.expected - 2.0) threshold += profile.cautious * 0.32;
+  if (alreadyLower) threshold -= 1.25 + profile.cautious * 0.8;
+  if (projectedLower) threshold -= 0.9 + profile.cautious * 0.75;
+  if (expected <= 2.2 && unknownOwn === 0 && !alreadyLower) threshold = Math.max(threshold, 2.6);
+  const cap = unknownOwn === 0 ? 5.25 + (risk === 'behind' ? 0.2 : 0) : 4.75 - unknownOwn * 0.32;
   threshold = Math.min(threshold, cap);
   if (Math.random() < profile.mistake * 0.5) threshold += randomBetween(0.4, 1.4);
   return expected <= threshold;
@@ -1287,14 +1668,12 @@ function botEndTurn(botId) {
   const bot = findPlayer(botId);
   const round = state.round;
   if (!bot || !bot.isBot || !round || currentPlayer()?.id !== bot.id) return;
-  if (round.stage === 'turn' && round.turnComplete && !round.dutchCallerId && botShouldCallDutch(bot)) {
-    setDutchCaller(bot);
-    advanceTurn();
+  if (canPlayerSayDutch(bot.id) && (bot.cards.length === 0 || botShouldCallDutch(bot))) {
+    callDutchForPlayer(bot);
     broadcastState();
     return;
   }
   if (round.stage === 'turn' && round.turnComplete) {
-    addLog(`${bot.name} ended turn`);
     advanceTurn();
     broadcastState();
   }
@@ -1322,7 +1701,7 @@ function botThrowInCandidate(bot) {
 function botDoThrowIn(botId, index, token) {
   const bot = findPlayer(botId);
   const round = state.round;
-  if (!bot || !bot.isBot || !round || !round.throwIn || !round.throwIn.open || round.throwIn.token !== token) return;
+  if (!bot || !bot.isBot || !round || !round.throwIn || !round.throwIn.open || round.throwIn.token !== token || isJackSwapInProgress()) return;
   if (round.stage === 'roundEnd' || round.stage === 'gameEnd') return;
   if (index < 0 || index >= bot.cards.length) return;
   const card = bot.cards[index];
@@ -1343,6 +1722,7 @@ function botDoThrowIn(botId, index, token) {
   removeSlotForAllBots(bot.id, index, 'throw-in');
   observeDiscardForAllBots(card, 'throw-in', bot.id);
   pushDiscard(card, bot.id, 'threw in', { allowThrowIn: false });
+  highlightPileForAll('event', 3000);
   broadcastState();
 }
 
@@ -1351,6 +1731,7 @@ function startingPlayerIndexForNextRound() {
   let bestIndex = 0;
   let bestScore = -Infinity;
   state.players.forEach((player, index) => {
+    if (player.left || player.isSpectator) return;
     const score = typeof player.roundPoints === 'number' ? player.roundPoints : -Infinity;
     if (score > bestScore) {
       bestScore = score;
@@ -1374,6 +1755,7 @@ function startRound() {
     throwIn: null,
     specialQueue: [],
     reveals: [],
+    pileHighlight: null,
     botTick: 0,
     dutchCallerId: null,
     dutchQueue: [],
@@ -1386,18 +1768,18 @@ function startRound() {
   for (const player of state.players) {
     player.cards = [];
     player.roundPoints = null;
-    player.startPeekDone = false;
+    player.startPeekDone = !!player.isSpectator;
     player.startPeekedCardIds = [];
   }
 
   for (let i = 0; i < 4; i += 1) {
-    for (const player of state.players) {
+    for (const player of activePlayablePlayers()) {
       player.cards.push(drawFromDeck());
     }
   }
 
   syncBotMemories();
-  addLog(`round ${state.roundNumber} started`);
+  addLog(`round ${state.roundNumber} started`, "system");
 }
 
 function createOpeningDiscardAfterPeek() {
@@ -1418,24 +1800,24 @@ function createOpeningDiscardAfterPeek() {
 function startGame() {
   if (state.phase !== 'waiting' || !hasPlayableHumanGame()) return;
   state.phase = 'playing';
+  const now = Date.now();
+  state.gameStartedAt = now;
+  state.lastGameActivityAt = now;
   state.log = [];
-  state.gameLog = [];
-  state.gameStartedAt = new Date().toISOString();
-  state.gameLogSaved = false;
   state.roundNumber = 0;
   state.scoreHistory = [];
   for (const p of state.players) {
     p.total = 0;
     p.roundPoints = null;
   }
-  const names = activePlayers().map((p) => p.name);
+  const names = activePlayablePlayers().map((p) => p.name);
   adminLog('game_started', { players: names, target: state.gameTarget });
-  addLog('game started');
+  addLog('game started', 'system');
   startRound();
 }
 
 function allPlayersPeeked() {
-  return state.players.every((p) => p.left || p.startPeekDone);
+  return state.players.every((p) => p.left || p.isSpectator || p.startPeekDone);
 }
 
 function beginTurnsIfReady() {
@@ -1449,8 +1831,6 @@ function beginTurnsIfReady() {
   state.round.turnComplete = false;
   state.round.drawn = null;
   addLog('all active players finished peeking');
-  const first = currentPlayer();
-  if (first) addLog(`${first.name}'s turn started`);
 }
 
 function advanceTurn() {
@@ -1468,10 +1848,9 @@ function advanceTurn() {
   if (round.dutchCallerId) {
     while (round.dutchQueue.length > 0) {
       const nextId = round.dutchQueue.shift();
-      const nextIndex = state.players.findIndex((p) => p.id === nextId && !p.left);
+      const nextIndex = state.players.findIndex((p) => p.id === nextId && !p.left && !p.isSpectator);
       if (nextIndex >= 0) {
         round.currentPlayerIndex = nextIndex;
-        addLog(`${state.players[nextIndex].name}'s final turn started`);
         return;
       }
     }
@@ -1486,7 +1865,13 @@ function advanceTurn() {
     return;
   }
   round.currentPlayerIndex = nextIndex;
-  addLog(`${currentPlayer().name}'s turn started`);
+}
+
+function pointChangeText(player, delta) {
+  const amount = Math.abs(delta);
+  const verb = delta < 0 ? 'lost' : 'gained';
+  const noun = amount === 1 ? 'point' : 'points';
+  return player.name + ' ' + verb + ' ' + amount + ' ' + noun;
 }
 
 function endRound() {
@@ -1498,15 +1883,17 @@ function endRound() {
   if (round.throwIn) round.throwIn.open = false;
   round.specialQueue = [];
 
-  const scoringPlayers = activePlayers();
+  const scoringPlayers = activePlayablePlayers();
   const scores = scoringPlayers.map((p) => ({
     player: p,
     raw: p.cards.reduce((sum, card) => sum + cardPoints(card), 0)
   }));
   const min = Math.min(...scores.map((s) => s.raw));
   const callerId = round.dutchCallerId;
+  const roundPointChanges = [];
 
   for (const score of scores) {
+    const totalBefore = score.player.total;
     let roundScore = score.raw;
     if (callerId && score.player.id === callerId) {
       roundScore = score.raw <= 5 && score.raw === min ? 0 : score.raw * 2;
@@ -1515,8 +1902,9 @@ function endRound() {
     score.player.total += roundScore;
     if (score.player.total === 50 || score.player.total === 100) {
       score.player.total = Math.floor(score.player.total / 2);
-      addLog(`${score.player.name}'s total was halved`);
+      addLog(score.player.name + "'s total was halved");
     }
+    roundPointChanges.push(pointChangeText(score.player, score.player.total - totalBefore));
   }
 
   state.scoreHistory.push({
@@ -1534,16 +1922,16 @@ function endRound() {
     .filter((p) => p.roundPoints === bestRoundScore)
     .map((p) => p.id);
 
+  addLog('round ended. ' + roundPointChanges.join(', '), 'system');
+
   const loser = scoringPlayers.find((p) => p.total > state.gameTarget);
   if (loser) {
     round.stage = 'gameEnd';
     const winner = scoringPlayers.slice().sort((a, b) => a.total - b.total)[0];
     round.winnerId = winner ? winner.id : null;
-    addLog(`game ended. ${winner ? winner.name : 'No one'} won`);
-    saveFinishedGameLog(`game ended. ${winner ? winner.name : 'No one'} won`);
+    addLog(`game ended. ${winner ? winner.name : 'No one'} won`, 'system');
     adminLog('game_ended_by_score', { target: state.gameTarget, winner: winner ? winner.name : null, scores: scoreSnapshot() });
-  } else {
-    addLog('round ended');
+    saveFinishedGameLog(winner ? winner.name : null);
   }
 }
 
@@ -1554,9 +1942,8 @@ function nextRound() {
 
 function resetToWaiting(keepPlayers = true, reason = 'returned to waiting room', options = {}) {
   clearBotTimers();
-  if (state.phase === 'playing') {
-    saveFinishedGameLog(reason);
-    if (options.adminEvent) adminLog(options.adminEvent, { reason, scores: scoreSnapshot() });
+  if (state.phase === 'playing' && options.adminEvent) {
+    adminLog(options.adminEvent, { reason, scores: scoreSnapshot() });
   }
   const players = keepPlayers ? state.players.filter((p) => p.connected && !p.left).map((p) => ({
     id: p.id,
@@ -1573,7 +1960,8 @@ function resetToWaiting(keepPlayers = true, reason = 'returned to waiting room',
     joinedAt: p.isBot ? null : Date.now(),
     isBot: !!p.isBot,
     botType: p.botType || '',
-    botMemory: null
+    botMemory: null,
+    isSpectator: !!p.isSpectator
   })) : [];
   state = freshState();
   state.players = players;
@@ -1625,6 +2013,11 @@ function handleMissingPlayers() {
 
 function purgeExpiredDisconnectedPlayers() {
   const now = Date.now();
+  if (state.phase === 'playing' && state.lastGameActivityAt && now - state.lastGameActivityAt > GAME_INACTIVITY_TIMEOUT_MS) {
+    resetToWaiting(true, 'game ended after 15 minutes without activity', { adminEvent: 'game_ended_inactivity_timeout' });
+    broadcastState();
+    return true;
+  }
   if (state.phase === 'waiting') {
     const expiredWaiting = state.players.filter((p) => !p.isBot && p.joinedAt && now - p.joinedAt > WAITING_ROOM_TIMEOUT_MS);
     if (expiredWaiting.length > 0) {
@@ -1651,8 +2044,8 @@ function purgeExpiredDisconnectedPlayers() {
     }
     if (currentId && remainingIds.has(currentId)) {
       state.round.currentPlayerIndex = state.players.findIndex((p) => p.id === currentId);
-    } else if (state.round.currentPlayerIndex >= state.players.length) {
-      state.round.currentPlayerIndex = 0;
+    } else if (state.round.currentPlayerIndex >= state.players.length || currentPlayer() === null) {
+      state.round.currentPlayerIndex = findActiveIndexFrom(state.round.currentPlayerIndex);
     }
   }
 
@@ -1693,16 +2086,27 @@ function removeWaitingPlayer(playerId, reason = 'removed from waiting room') {
   return true;
 }
 
+function moveWaitingPlayer(playerId, direction) {
+  if (state.phase !== 'waiting') return false;
+  const index = state.players.findIndex((p) => p.id === playerId && !p.left);
+  if (index < 0) return false;
+  const offset = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+  if (!offset) return false;
+  const nextIndex = index + offset;
+  if (nextIndex < 0 || nextIndex >= state.players.length) return false;
+  const [player] = state.players.splice(index, 1);
+  state.players.splice(nextIndex, 0, player);
+  return true;
+}
 
-function addBotPlayer(type, requesterId = '') {
+function addBotPlayer(type) {
   if (state.phase !== 'waiting') return { ok: false, message: 'Bots can only be added in the waiting room.' };
-  if (!isActivePlayer(requesterId)) return { ok: false, message: 'Join the waiting room before adding bots.' };
   if (!BOT_PROFILES[type]) return { ok: false, message: 'Unknown bot type.' };
   if (activePlayerCount() >= 9) return { ok: false, message: 'The player list is full.' };
   if (activePlayers().some((p) => p.isBot && p.botType === type)) return { ok: false, message: 'That bot is already in the player list.' };
   const profile = BOT_PROFILES[type];
-  if (activePlayers().some((p) => p.name.trim().toLocaleLowerCase() === profile.name.toLocaleLowerCase())) {
-    return { ok: false, message: `${profile.name} cannot be added because that name is already used.` };
+  if (playerShortNameTaken(profile.name, `bot-${type}`, type)) {
+    return { ok: false, message: `${profile.name} cannot be added because that table name is already used.` };
   }
   state.players.push({
     id: `bot-${type}`,
@@ -1728,6 +2132,13 @@ function addBotPlayer(type, requesterId = '') {
 
 function assertPlayer(socket) {
   return findPlayer(playerIdForSocket(socket));
+}
+
+function runSocketAction(socket, action, options = {}) {
+  const player = options.requirePlayer === false ? null : assertPlayer(socket);
+  if (options.requirePlayer !== false && !player) return;
+  const result = action(player);
+  if (result !== false) broadcastState();
 }
 
 io.on('connection', (socket) => {
@@ -1756,8 +2167,9 @@ io.on('connection', (socket) => {
     const tokenRaw = joinRaw && typeof joinRaw === 'object' ? joinRaw.token : '';
     const joinToken = normalizePlayerToken(tokenRaw);
     if (joinToken) socket.data.playerId = joinToken;
-    const name = String(nameRaw || '').trim().slice(0, 12);
+    const name = String(nameRaw || '').trim().slice(0, PLAYER_NAME_MAX_LENGTH);
     if (!name) return;
+    const isSpectator = isSpectatorName(name);
     if (state.phase !== 'waiting') {
       socket.emit('notice', state.waitingMessage);
       broadcastState();
@@ -1765,9 +2177,8 @@ io.on('connection', (socket) => {
     }
     if (activePlayerCount() >= 9) return;
     const playerId = playerIdForSocket(socket);
-    const duplicateName = activePlayers().some((p) => p.id !== playerId && p.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
-    if (duplicateName) {
-      socket.emit('notice', 'This name is already in the player list.');
+    const duplicateShortName = !isSpectator && playerShortNameTaken(name, playerId);
+    if (duplicateShortName) {
       broadcastState();
       return;
     }
@@ -1791,10 +2202,11 @@ io.on('connection', (socket) => {
       cards: [],
       startPeekDone: false,
       startPeekedCardIds: [],
-      joinedAt: Date.now()
+      joinedAt: Date.now(),
+      isSpectator
     });
     clampDeckSetting();
-    addLog(`${name} joined`);
+    addLog(isSpectator ? `${name} joined as a spectator` : `${name} joined`);
     broadcastState();
   });
 
@@ -1832,32 +2244,34 @@ io.on('connection', (socket) => {
   });
 
   socket.on('setDeckSetting', (value) => {
-    if (!assertPlayer(socket)) return;
-    setDeckSetting(value);
-    broadcastState();
+    runSocketAction(socket, () => setDeckSetting(value), { requirePlayer: false });
   });
 
   socket.on('setGameTarget', (value) => {
-    if (!assertPlayer(socket)) return;
-    setGameTarget(value);
-    broadcastState();
+    runSocketAction(socket, () => setGameTarget(value), { requirePlayer: false });
   });
 
   socket.on('removeWaitingPlayer', (playerId) => {
-    if (removeWaitingPlayer(String(playerId || ''), 'was removed from the waiting room')) broadcastState();
+    runSocketAction(socket, () => removeWaitingPlayer(String(playerId || ''), 'was removed from the waiting room'), { requirePlayer: false });
+  });
+
+  socket.on('moveWaitingPlayer', (moveRaw) => {
+    runSocketAction(socket, () => {
+      const playerId = moveRaw && typeof moveRaw === 'object' ? moveRaw.playerId : '';
+      const direction = moveRaw && typeof moveRaw === 'object' ? moveRaw.direction : '';
+      return moveWaitingPlayer(String(playerId || ''), String(direction || ''));
+    }, { requirePlayer: false });
   });
 
   socket.on('addBot', (typeRaw) => {
-    const player = assertPlayer(socket);
-    const result = addBotPlayer(String(typeRaw || ''), player ? player.id : '');
-    if (!result.ok && result.message) socket.emit('notice', result.message);
-    broadcastState();
+    runSocketAction(socket, () => {
+      const result = addBotPlayer(String(typeRaw || ''));
+      if (!result.ok && result.message) socket.emit('notice', result.message);
+    }, { requirePlayer: false });
   });
 
   socket.on('startGame', () => {
-    if (!assertPlayer(socket)) return;
-    startGame();
-    broadcastState();
+    runSocketAction(socket, () => startGame());
   });
 
   socket.on('peekStart', (cardId) => {
@@ -1870,7 +2284,9 @@ io.on('connection', (socket) => {
     if (player.startPeekedCardIds.includes(cardId)) return;
     if (player.startPeekedCardIds.length >= 2) return;
     player.startPeekedCardIds.push(cardId);
+    markGameActivity();
     revealCardTo(player.id, cardId, 3000);
+    highlightCardForAll(cardId, 'peek', 3000, { exceptViewerId: player.id });
     if (player.startPeekedCardIds.length === 2) {
       player.startPeekDone = true;
       addLog(`${player.name} finished start peek`);
@@ -1883,12 +2299,11 @@ io.on('connection', (socket) => {
     const player = assertPlayer(socket);
     const round = state.round;
     if (!player || !round || round.stage !== 'turn') return;
-    if (currentPlayer()?.id !== player.id || round.drawn || round.turnComplete || topSpecial()) return;
+    if (currentPlayer()?.id !== player.id || round.drawn || round.turnComplete || topSpecial() || mustPlayerSayDutch(player.id)) return;
     closeThrowInBecauseOfPlayingAction();
     const card = drawFromDeck();
     if (!card) return;
     round.drawn = { playerId: player.id, source: 'deck', card };
-    addLog(`${player.name} drew from deck`);
     broadcastState();
   });
 
@@ -1896,13 +2311,12 @@ io.on('connection', (socket) => {
     const player = assertPlayer(socket);
     const round = state.round;
     if (!player || !round || round.stage !== 'turn') return;
-    if (currentPlayer()?.id !== player.id || round.drawn || round.turnComplete || topSpecial()) return;
+    if (currentPlayer()?.id !== player.id || round.drawn || round.turnComplete || topSpecial() || mustPlayerSayDutch(player.id)) return;
     if (round.discard.length === 0) return;
     closeThrowInBecauseOfPlayingAction();
     const card = round.discard.pop();
     round.drawn = { playerId: player.id, source: 'pile', card };
     observePileTakeForAllBots(player.id, card);
-    addLog(`${player.name} took pile`);
     broadcastState();
   });
 
@@ -1915,7 +2329,7 @@ io.on('connection', (socket) => {
     round.drawn = null;
     round.turnComplete = true;
     observeDiscardForAllBots(card, 'discarded', player.id);
-    pushDiscard(card, player.id, 'discarded');
+    pushDiscard(card, player.id, 'drew {card} from deck but discarded it');
     broadcastState();
   });
 
@@ -1929,13 +2343,14 @@ io.on('connection', (socket) => {
     const oldCard = player.cards[index];
     const newCard = round.drawn.card;
     player.cards[index] = newCard;
+    highlightCardForAll(newCard.id, 'event', 3000);
     const source = round.drawn.source;
     round.drawn = null;
     round.turnComplete = true;
     if (source === 'pile') rememberSlotForAllBots(player.id, index, newCard, 'pile observation', 0.9);
     else forgetSlotForAllBots(player.id, index, 'deck swap');
     observeDiscardForAllBots(oldCard, 'swap discard', player.id);
-    pushDiscard(oldCard, player.id, source === 'pile' ? 'replaced with pile card and discarded' : 'replaced a card and discarded');
+    pushDiscard(oldCard, player.id, source === 'pile' ? `drew ${label(newCard)} from pile and discarded {card}` : 'drew from deck and discarded {card}');
     broadcastState();
   });
 
@@ -1944,7 +2359,7 @@ io.on('connection', (socket) => {
     const round = state.round;
     if (!player || !round) return;
     if (!round.throwIn || !round.throwIn.open) return;
-    if (round.stage === 'roundEnd' || round.stage === 'gameEnd') return;
+    if (round.stage === 'roundEnd' || round.stage === 'gameEnd' || isJackSwapInProgress()) return;
     const index = player.cards.findIndex((c) => c.id === cardId);
     if (index < 0) return;
     const card = player.cards[index];
@@ -1965,6 +2380,7 @@ io.on('connection', (socket) => {
     removeSlotForAllBots(player.id, index, 'throw-in');
     observeDiscardForAllBots(card, 'throw-in', player.id);
     pushDiscard(card, player.id, 'threw in', { allowThrowIn: false });
+    highlightPileForAll('event', 3000);
     broadcastState();
   });
 
@@ -1975,11 +2391,13 @@ io.on('connection', (socket) => {
     if (!player || !round || round.stage !== 'special' || !special) return;
     if (special.actorId !== player.id || special.type !== 'A') return;
     const target = findPlayer(targetId);
-    if (!target || isProtectedSpecialTarget(target.id)) return;
+    if (!target || target.isSpectator || isProtectedSpecialTarget(target.id)) return;
     const card = drawFromDeck();
     if (card) {
       target.cards.push(card);
+      highlightCardForAll(card.id, 'event', 3000);
       addUnknownSlotForAllBots(target.id, 'Ace');
+      observeAceForAllBots(player.id, target.id);
       addLog(`${player.name} gave a card to ${target.name}`);
     }
     finishSpecial();
@@ -1995,6 +2413,7 @@ io.on('connection', (socket) => {
     const target = playerByCardId(cardId);
     if (!target) return;
     revealCardTo(player.id, cardId, 3000);
+    highlightCardForAll(cardId, 'peek', 3000, { exceptViewerId: player.id });
     addLog(`${player.name} used Queen peek`);
     finishSpecial();
     broadcastState();
@@ -2009,35 +2428,22 @@ io.on('connection', (socket) => {
     const target = playerByCardId(cardId);
     if (!target || isProtectedSpecialTarget(target.player.id)) return;
     special.selected = special.selected || [];
-    if (special.selected.includes(cardId)) return;
+    if (special.resolving || special.selected.length >= 2 || special.selected.includes(cardId)) return;
     special.selected.push(cardId);
+    markGameActivity();
     if (special.selected.length < 2) {
       broadcastState();
       return;
     }
-    const a = playerByCardId(special.selected[0]);
-    const b = playerByCardId(special.selected[1]);
-    if (a && b && !isProtectedSpecialTarget(a.player.id) && !isProtectedSpecialTarget(b.player.id) && a.card.id !== b.card.id) {
-      [a.player.cards[a.index], b.player.cards[b.index]] = [b.player.cards[b.index], a.player.cards[a.index]];
-      moveSlotMemoryForAllBots(a.player.id, a.index, b.player.id, b.index, 'Jack swap');
-      addLog(`${player.name} used Jack swap`);
-    }
-    finishSpecial();
-    broadcastState();
+    beginJackSwapResolution(player.id, special.selected);
   });
 
 
-  socket.on('sayDutch', () => {
+  socket.on("sayDutch", () => {
     const player = assertPlayer(socket);
     const round = state.round;
-    const special = topSpecial();
-    if (!player || !round || !canPlayerSayDutch(player.id)) return;
-    if (round.stage === 'special' && special && special.actorId === player.id) {
-      addLog(`${player.name} skipped ${specialName(special.type)}`);
-      finishSpecial();
-    }
-    setDutchCaller(player);
-    advanceTurn();
+    if (!player || !round) return;
+    if (!callDutchForPlayer(player)) return;
     broadcastState();
   });
 
@@ -2046,7 +2452,7 @@ io.on('connection', (socket) => {
     const round = state.round;
     const special = topSpecial();
     if (!player || !round) return;
-    if (round.stage === "special" && special && special.actorId === player.id) {
+    if (round.stage === "special" && special && special.actorId === player.id && !isJackSwapSelectionActive(special)) {
       addLog(`${player.name} skipped ${specialName(special.type)}`);
       finishSpecial();
       if (round.stage === "turn" && round.turnComplete && currentPlayer()?.id === player.id) advanceTurn();
@@ -2055,27 +2461,20 @@ io.on('connection', (socket) => {
     }
     if (round.stage !== "turn") return;
     if (currentPlayer()?.id !== player.id || !round.turnComplete) return;
-    addLog(`${player.name} ended turn`);
     advanceTurn();
     broadcastState();
   });
 
   socket.on('nextRound', () => {
-    if (!assertPlayer(socket)) return;
-    nextRound();
-    broadcastState();
+    runSocketAction(socket, () => nextRound());
   });
 
   socket.on('newGame', () => {
-    if (!assertPlayer(socket)) return;
-    resetToWaiting(true);
-    broadcastState();
+    runSocketAction(socket, () => resetToWaiting(true));
   });
 
   socket.on('endGameForAll', () => {
-    if (!assertPlayer(socket)) return;
-    resetToWaiting(true, 'game cancelled by players', { adminEvent: 'game_cancelled' });
-    broadcastState();
+    runSocketAction(socket, () => resetToWaiting(true, 'game cancelled by players', { adminEvent: 'game_cancelled' }));
   });
 
   socket.on('disconnect', () => {

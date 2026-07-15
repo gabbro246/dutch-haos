@@ -3,6 +3,7 @@
 ## 1.2.26
 
 - Sync Dutch 1.2.25 source to upstream commit `405b045588d3`.
+- Restore the saved game log viewer against the Home Assistant share-backed log path.
 
 ## 1.2.25
 

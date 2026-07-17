@@ -1,10 +1,6 @@
 # Changelog
 
-## 1.3.4
-
-- Update the Home Assistant add-on wrapper.
-
-## 1.3.3
+## 1.3.5
 
 - Merge existing internal Dutch game logs into the Home Assistant share-backed log directory, then link the internal path to it.
 

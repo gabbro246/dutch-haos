@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.29
+
+- Merge existing internal Dutch game logs into the Home Assistant share-backed log directory, then link the internal path to it.
+
 ## 1.2.27
 
 - Update the Home Assistant add-on wrapper.

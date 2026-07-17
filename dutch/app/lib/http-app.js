@@ -43,15 +43,40 @@ function playerShortNamesFromLines(lines) {
   return names.join(', ');
 }
 
+function rankedPlayersFromLines(lines) {
+  const pointsHeaderIndex = lines.findIndex((line) => /^Round\s*\|/.test(line));
+  if (pointsHeaderIndex < 0) return '';
+  const names = lines[pointsHeaderIndex]
+    .split('|')
+    .slice(1)
+    .map((name) => name.trim());
+  const scoreLine = lines
+    .slice(pointsHeaderIndex + 1)
+    .filter((line) => /^Round\s+\d+\s*\|/.test(line))
+    .at(-1);
+  if (!scoreLine) return '';
+  const scores = scoreLine
+    .split('|')
+    .slice(1)
+    .map((score) => score.trim());
+  const ranked = names
+    .map((name, index) => ({
+      name,
+      score: Number(scores[index])
+    }))
+    .filter((player) => player.name && Number.isFinite(player.score))
+    .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
+  return ranked.map((player) => shortPlayerName(player.name)).join(', ');
+}
+
 function logSummaryFromContent(content) {
   const lines = String(content || '').split(/\r?\n/);
-  const winner = logLineValue(lines, 'Winner');
   const rounds = logLineValue(lines, 'Rounds');
+  const rankedPlayers = rankedPlayersFromLines(lines);
   const players = playerShortNamesFromLines(lines);
   return {
     summaryText: [
-      players ? 'Players: ' + players : '',
-      winner ? 'Winner: ' + shortPlayerName(winner) : '',
+      rankedPlayers ? 'Ranking: ' + rankedPlayers : (players ? 'Players: ' + players : ''),
       rounds ? 'Rounds: ' + rounds : ''
     ].filter(Boolean).join(' · ')
   };
@@ -87,7 +112,10 @@ function renderLogList(files, appVersion) {
     body: '<div class="page waiting-page">' +
       '<h1 class="app-title">Dutch! 🂡</h1>' +
       '<div class="waiting-panel logs-panel">' +
-        '<p class="waiting-description">Saved game logs</p>' +
+        '<div class="log-view-header">' +
+          '<p class="waiting-description">Saved game logs</p>' +
+          '<a class="log-back-link" href="/">Back to main page</a>' +
+        '</div>' +
         '<div class="log-file-list">' + (items || empty) + '</div>' +
       '</div>' +
     '</div>'
@@ -104,7 +132,9 @@ function renderLogViewer(filename, content, appVersion) {
       '<div class="waiting-panel logs-panel">' +
         '<div class="log-view-header">' +
           '<p class="waiting-description">' + escapeHtml(displayLogName(filename)) + '</p>' +
-          '<a class="log-back-link" href="/logs">Back to logs</a>' +
+          '<span class="log-nav-links">' +
+            '<a class="log-back-link" href="/logs">Back to logs</a>' +
+          '</span>' +
         '</div>' +
         '<pre class="saved-log-view">' + escapeHtml(content) + '</pre>' +
         '<div class="log-download-row">' +
@@ -204,4 +234,4 @@ function createHttpApp({ indexPath, publicDir, appVersion, gameLogDir }) {
   return app;
 }
 
-module.exports = { createHttpApp };
+module.exports = { createHttpApp, logSummaryFromContent, rankedPlayersFromLines };

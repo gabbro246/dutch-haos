@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.6
+
+- Sync Dutch 1.3.6 source to upstream commit `bb931cebb6c5`.
+
 ## 1.3.5
 
 - Merge existing internal Dutch game logs into the Home Assistant share-backed log directory, then link the internal path to it.

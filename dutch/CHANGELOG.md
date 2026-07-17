@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.29
+## 1.3.3
 
 - Merge existing internal Dutch game logs into the Home Assistant share-backed log directory, then link the internal path to it.
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.11
+
+- Update the Home Assistant add-on wrapper.
+
 ## 1.3.10
 
 - Update the Home Assistant add-on wrapper.

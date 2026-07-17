@@ -1,48 +1,17 @@
-# Dutch Home Assistant add-on repository
+# Dutch for Home Assistant OS 🂡
+A Home Assistant OS app for hosting [Dutch](https://github.com/gabbro246/dutch), a local multiplayer card game that can be played in a browser against other players or bots.
 
-This repository wraps [`gabbro246/dutch`](https://github.com/gabbro246/dutch) as a Home Assistant add-on.
+## Installation
+1. In Home Assistant, open **Settings → Apps → App store**.
+2. Open the three-dot menu in the top-right corner and select **Repositories**.
+3. Add the repository `https://github.com/gabbro246/dutch-haos`
+4. Find **Dutch** in the app store and select **Install**.
+5. Start the app, then select **Open Web UI** to play.
 
-It contains a vendored copy of the Dutch app in [`dutch/app`](dutch/app). The add-on runs that bundled source while Home Assistant detects updates through the add-on `version` in [`dutch/config.yaml`](dutch/config.yaml).
+## Open Dutch on Other Devices
+To play on another phone, tablet, or computer connected to the same network, open Dutch using the hostname or local IP address of your Home Assistant system:
+`http://homeassistant.local:3000`
+or:
+`http://HOME-ASSISTANT-IP:3000`
 
-The [`Sync Dutch source`](.github/workflows/sync-dutch.yml) workflow copies new upstream changes from `gabbro246/dutch`, records the upstream commit in [`dutch/SOURCE_REVISION`](dutch/SOURCE_REVISION), bumps the Home Assistant add-on version, keeps the Dutch app package version in sync, and commits the result.
-
-The workflow does not poll on a schedule. It runs manually or when `gabbro246/dutch` sends a `repository_dispatch` event named `dutch-updated` after a push to `main`. The sync copies Dutch source and bumps the Home Assistant add-on version so Home Assistant can notice the update. A separate wrapper workflow bumps the add-on version for `dutch-haos` changes that do not touch the vendored Dutch app.
-
-Add this workflow to `gabbro246/dutch` as `.github/workflows/notify-dutch-haos.yml`:
-
-```yaml
-name: Notify Dutch HAOS
-
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  notify:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch dutch-haos sync
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.DUTCH_HAOS_DISPATCH_TOKEN }}
-          script: |
-            await github.rest.repos.createDispatchEvent({
-              owner: 'gabbro246',
-              repo: 'dutch-haos',
-              event_type: 'dutch-updated'
-            });
-```
-
-`DUTCH_HAOS_DISPATCH_TOKEN` must be a fine-grained GitHub token with access to `gabbro246/dutch-haos` and the repository permission `Contents: read and write`.
-
-## Install
-
-1. In Home Assistant, open Settings -> Add-ons -> Add-on Store.
-2. Add the repository `https://github.com/gabbro246/dutch-haos` as a custom add-on repository.
-3. Install the `Dutch` add-on.
-4. Start it.
-
-The add-on exposes the Dutch web UI on container port `3000`, mapped to host port `3000` by default. You can change the host port in the add-on Network settings if needed.
-
-Game logs are written to the configured `game_log_dir`, which defaults to `/share/dutch/logs`. The add-on maps Home Assistant's `share` folder read-write, so this path is backed by the Home Assistant share folder.
+Dutch uses port `3000` by default. If you change the port in the app’s **Network** settings, use the new port in the address instead.

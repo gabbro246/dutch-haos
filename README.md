@@ -1,4 +1,4 @@
-# Dutch for Home Assistant OS 🂡
+# Dutch 🂡 for Home Assistant OS
 A Home Assistant OS app for hosting [Dutch](https://github.com/gabbro246/dutch), a local multiplayer card game that can be played in a browser against other players or bots.
 
 ## Installation

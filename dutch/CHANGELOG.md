@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.10
+
+- Update the Home Assistant add-on wrapper.
+
 ## 1.3.9
 
 - Sync Dutch 1.3.7 source to upstream commit `e614246adc0b`.

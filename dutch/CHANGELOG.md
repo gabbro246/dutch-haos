@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.7.0
+
+- Includes Dutch 1.3.41.
+- fixed the manual rejoin screen appearing too late when a connection drops during the opening peek, without allowing connected players to be reclaimed
+- fixed the in-game game-length selector staying locked after exact-score halving or after a high-scoring player leaves
+- Home Assistant updates now show the matching Dutch release notes from the upstream changelog.
+
 ## 1.3.43
 
 - Sync Dutch 1.3.41 source to upstream commit `d9e7225154ec`.

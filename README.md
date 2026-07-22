@@ -8,6 +8,9 @@ A Home Assistant OS app for hosting [Dutch](https://github.com/gabbro246/dutch),
 4. Find **Dutch** in the app store and select **Install**.
 5. Start the app, then select **Open Web UI** to play.
 
+## Versions
+The Home Assistant app uses Calendar Versioning in the form `YYYY.M.RELEASE`. This is separate from the bundled Dutch game version, which is identified in each changelog entry.
+
 ## Open Dutch on Other Devices
 To play on another phone, tablet, or computer connected to the same network, open Dutch using the hostname or local IP address of your Home Assistant system:
 `http://homeassistant.local:3000`

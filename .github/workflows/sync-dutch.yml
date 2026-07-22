@@ -84,12 +84,16 @@ jobs:
 
           printf '%s\n' "${upstream_sha}" > "${ADDON_DIR}/SOURCE_REVISION"
 
-          addon_version="$(node - "${current_addon_version}" "${upstream_version}" <<'NODE'
+          addon_version="$(node - "${current_addon_version}" <<'NODE'
           const current = process.argv[2].split('.').map(Number);
-          const upstream = process.argv[3].split('.').map(Number);
-          const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-          if (compare(upstream, current) > 0) {
-            console.log(upstream.join('.'));
+          const now = new Date();
+          const year = now.getUTCFullYear();
+          const month = now.getUTCMonth() + 1;
+
+          if (current[0] === year && current[1] === month) {
+            console.log(`${year}.${month}.${current[2] + 1}`);
+          } else if (current[0] < year || (current[0] === year && current[1] < month)) {
+            console.log(`${year}.${month}.0`);
           } else {
             console.log([current[0], current[1], current[2] + 1].join('.'));
           }
@@ -125,7 +129,27 @@ jobs:
           const changelogPath = 'dutch/CHANGELOG.md';
           if (fs.existsSync(changelogPath)) {
             const changelog = fs.readFileSync(changelogPath, 'utf8');
-            const entry = `## ${addonVersion}\n\n- Sync Dutch ${appVersion} source to upstream commit \`${shortSha}\`.\n\n`;
+            const appChangelogPath = 'dutch/app/CHANGELOG.md';
+            let releaseNotes = '';
+
+            if (fs.existsSync(appChangelogPath)) {
+              const appChangelog = fs.readFileSync(appChangelogPath, 'utf8');
+              const sections = appChangelog.split(/^##[ \t]+/m).slice(1);
+              const versionSection = sections.find((section) => {
+                const heading = section.split(/\r?\n/, 1)[0].trim();
+                return heading === appVersion;
+              });
+
+              if (versionSection) {
+                releaseNotes = versionSection.replace(/^[^\r\n]*(?:\r?\n)?/, '').trim();
+              }
+            }
+
+            const fallback = `- Sync Dutch ${appVersion} source to upstream commit \`${shortSha}\`.`;
+            const details = releaseNotes
+              ? `- Includes Dutch ${appVersion}.\n${releaseNotes}`
+              : fallback;
+            const entry = `## ${addonVersion}\n\n${details}\n\n`;
             fs.writeFileSync(changelogPath, changelog.replace(/^# Changelog\n\n/, `# Changelog\n\n${entry}`));
           }
           NODE

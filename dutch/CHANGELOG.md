@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.7.1
+
+- Includes Dutch 1.3.42.
+- fixed the Start game button becoming unresponsive after ending a game manually
+- increased the post-peek pause before the opening card travels to the pile
+- fixed the opening-card reveal being skipped when a browser processes its travel and reveal updates together
+
 ## 2026.7.0
 
 - Includes Dutch 1.3.41.

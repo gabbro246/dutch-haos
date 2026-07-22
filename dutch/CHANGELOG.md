@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.7.3
+
+- Includes Dutch 1.3.43.
+* Fixed stuttery pile reveals and preserved flips during rerenders.
+* Cards now move face-down and reveal at the 50% rotation point.
+* Bots, reactions, effects, logs, and controls activate only at that midpoint.
+* Applied to opening cards, discards, swaps, throw-ins, and special cards.
+
 ## 2026.7.2
 
 - Includes Dutch 1.3.43.

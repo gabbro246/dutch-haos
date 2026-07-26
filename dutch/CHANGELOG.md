@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.7.6
+
+- Includes Dutch 1.3.46.
+- allowed throw-ins while a player decides what to do with a card drawn from the deck
+- kept drawn cards face-up when their player discards them, while hiding them from everyone else until the reveal
+
 ## 2026.7.5
 
 - Includes Dutch 1.3.45.

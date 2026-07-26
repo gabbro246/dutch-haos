@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.7.5
+
+- Includes Dutch 1.3.45.
+- added clear descriptions beneath every game setting to explain game length, inactivity timeouts, deck amounts, changed-card highlights, and appearance options
+
 ## 2026.7.4
 
 - Includes Dutch 1.3.44.

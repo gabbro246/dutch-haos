@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.8.2
+
+- Includes Dutch 1.3.50.
+- added a double 200-point game with score halving at exactly 50, 100, and 200 points
+- improved player colors for clearer distinction in light and dark modes
+- made graph markers less intrusive and added help cursors to information labels
+
 ## 2026.8.1
 
 - Includes Dutch 1.3.48.

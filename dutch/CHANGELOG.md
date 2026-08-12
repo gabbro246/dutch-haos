@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.8.1
+
+- Includes Dutch 1.3.48.
+- added an points-over-time graph with distinct player colors that are also shown in the player fields and points table
+- automatically opens the points table after round one and the points graph after round three
+
 ## 2026.8.0
 
 - Includes Dutch 1.3.47.

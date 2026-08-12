@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.8.0
+
+- Includes Dutch 1.3.47.
+- added German
+
 ## 2026.7.6
 
 - Includes Dutch 1.3.46.

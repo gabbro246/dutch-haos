@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.8.5
+
+- Includes Dutch 1.3.54.
+- kept in-game settings dropdowns open during live moves without pausing game updates
+- kept longer game lengths selectable after a lower target was exceeded, while disabling only targets already passed
+- improved saved game logs with readable times, game duration, a larger graph, and a clearer score table
+- improved score graphs with centered labels and guides for score-halving points
+
 ## 2026.8.4
 
 - Includes Dutch 1.3.53.

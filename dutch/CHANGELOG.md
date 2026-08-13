@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.8.4
+
+- Includes Dutch 1.3.53.
+- added a quick half-second chance to throw in after the final turn
+- made the zero-point red Kings clearer in the game guide
+
 ## 2026.8.3
 
 - Includes Dutch 1.3.51.

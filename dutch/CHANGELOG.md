@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.8.11
+
+- Includes Dutch 1.3.59.
+- added sound effects for throwing in, receiving cards and peeking
+- timed card sounds to match their movements and made rapid consecutive sounds play reliably
+- kept game sounds limited to participating game pages, so an open “game already active” page no longer repeats them
+
 ## 2026.8.10
 
 - Includes Dutch 1.3.58.

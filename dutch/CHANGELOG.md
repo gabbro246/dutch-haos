@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.8.10
+
+- Includes Dutch 1.3.58.
+- added sound effects for a couple of actions. more will follow
+
 ## 2026.8.9
 
 - Includes Dutch 1.3.57.

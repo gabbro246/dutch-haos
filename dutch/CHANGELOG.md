@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.8.13
+
+- Includes Dutch 1.3.61.
+- added a round-robin initial deal animation and kept peeking locked until the final card lands
+- bots now wait for other animations to finish before they do J swap
+
 ## 2026.8.12
 
 - Includes Dutch 1.3.60.

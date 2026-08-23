@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.8.15
+
+- Includes Dutch 1.3.64.
+- prevented game sound effects from repeatedly lowering the volume of music, podcasts, and other media on supported platforms
+
 ## 2026.8.14
 
 - Includes Dutch 1.3.62.

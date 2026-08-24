@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.8.16
+
+- Includes Dutch 1.3.66.
+- made the deck count decrease along with the opening deal animation
+- added a choice of which two Roswell strategy releases to compare in tournaments
+- made releases without bot changes reuse the most recent Roswell strategy snapshot
+- added the Dutch version to saved game logs and their log viewer
+- hid some settings below a show more button
+
 ## 2026.8.15
 
 - Includes Dutch 1.3.64.

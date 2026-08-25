@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.8.18
+
+- Includes Dutch 1.3.68.
+- made Roswell prioritize improving red Kings, Aces and low Dutch-ready cards from the pile
+- made guaranteed throw-ins compete with learning another unknown card
+- made Roswell call Dutch sooner when waiting would let another player call first
+
 ## 2026.8.17
 
 - Includes Dutch 1.3.67.

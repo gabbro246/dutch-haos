@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.8.19
+
+- Includes Dutch 1.3.69.
+- showed the game seed in saved logs and the log viewer
+
 ## 2026.8.18
 
 - Includes Dutch 1.3.68.

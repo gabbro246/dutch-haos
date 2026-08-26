@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.8.22
+
+- Includes Dutch 1.3.72.
+- reverted to previous confetti animation
+- added a shuffle sound when rebuilding the draw deck
+
 ## 2026.8.21
 
 - Includes Dutch 1.3.71.

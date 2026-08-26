@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.8.21
+
+- Includes Dutch 1.3.71.
+- made animations ease smoothly in and out
+- fixed some drawers appearing instantly instead of opening smoothly
+
 ## 2026.8.20
 
 - Includes Dutch 1.3.70.

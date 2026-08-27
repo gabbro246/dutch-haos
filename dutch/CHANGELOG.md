@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.8.23
+
+- Includes Dutch 1.3.73.
+- fixed game buttons sometimes missing presses while the screen was updating
+
 ## 2026.8.22
 
 - Includes Dutch 1.3.72.

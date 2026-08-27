@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.8.24
+
+- Includes Dutch 1.3.76.
+- added tournaments between different bots from stored game versions
+- balanced version tournaments across both player positions
+
 ## 2026.8.23
 
 - Includes Dutch 1.3.73.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.8.25
+
+- Includes Dutch 1.3.77.
+- made Beta bots always replace unknown cards, even after a bad draw
+- gave Beta bots simpler rules for pile cards, Dutch, and score halving
+
 ## 2026.8.24
 
 - Includes Dutch 1.3.76.

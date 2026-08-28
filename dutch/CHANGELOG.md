@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.8.26
+
+- Includes Dutch 1.3.78.
+- stopped Beta bots repeatedly retrying a card after seeing that it was a wrong throw-in
+
 ## 2026.8.25
 
 - Includes Dutch 1.3.77.

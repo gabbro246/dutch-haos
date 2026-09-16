@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.9.0
+
+- Includes Dutch 1.3.84.
+- shortened the throw-in time to one second
+- removed older bot versions from the opponents you can add
+
 ## 2026.8.27
 
 - Includes Dutch 1.3.79.

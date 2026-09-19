@@ -1,20 +1,39 @@
-# Dutch 🂡 for Home Assistant OS
-A Home Assistant OS app for hosting [Dutch](https://github.com/gabbro246/dutch), a local multiplayer card game that can be played in a browser against other players or bots.
+# Dutch for Home Assistant
 
-## Installation
+Dutch is a local multiplayer card game that runs as a Home Assistant app. Play
+in a browser with other people on your network or against bots.
+
+## What it does
+
+The app hosts [Dutch](https://github.com/gabbro246/dutch) directly on your Home
+Assistant system. Games open in a browser, and completed game logs can be kept
+in Home Assistant's shared storage.
+
+## Install
+
 1. In Home Assistant, open **Settings → Apps → App store**.
-2. Open the three-dot menu in the top-right corner and select **Repositories**.
-3. Add the repository `https://github.com/gabbro246/dutch-haos`
+2. Open the three-dot menu in the top-right corner and select
+   **Repositories**.
+3. Add `https://github.com/gabbro246/dutch-haos`.
 4. Find **Dutch** in the app store and select **Install**.
 5. Start the app, then select **Open Web UI** to play.
 
-## Versions
-The Home Assistant app uses Calendar Versioning in the form `YYYY.M.RELEASE`. This is separate from the bundled Dutch game version, which is identified in each changelog entry.
+## Play on another device
 
-## Open Dutch on Other Devices
-To play on another phone, tablet, or computer connected to the same network, open Dutch using the hostname or local IP address of your Home Assistant system:
+On a phone, tablet, or computer connected to the same network, open:
+
 `http://homeassistant.local:3000`
-or:
-`http://HOME-ASSISTANT-IP:3000`
 
-Dutch uses port `3000` by default. If you change the port in the app’s **Network** settings, use the new port in the address instead.
+If that address is unavailable, replace `homeassistant.local` with the local
+IP address of your Home Assistant system. If you change the app's port under
+**Network**, use the new port in the address.
+
+## Versions
+
+The Home Assistant app uses Calendar Versioning in the form
+`YYYY.M.RELEASE`. The bundled Dutch game keeps its own separate Semantic
+Version, shown in the app changelog.
+
+## License
+
+[MIT](LICENSE)

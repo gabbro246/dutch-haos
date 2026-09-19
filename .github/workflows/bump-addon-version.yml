@@ -1,33 +1,34 @@
-name: Bump add-on version
+name: Bump app version
 
 on:
   push:
     branches:
       - main
-    paths-ignore:
-      - dutch/app/**
-      - dutch/SOURCE_REVISION
+    paths:
+      - dutch/Dockerfile
+      - dutch/run.sh
+      - dutch/config.yaml
 
 permissions:
   contents: write
 
 concurrency:
-  group: bump-addon-version
+  group: bump-app-version
   cancel-in-progress: false
 
 jobs:
   bump:
-    name: Bump Home Assistant add-on version
+    name: Bump Home Assistant app version
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out add-on repository
+      - name: Check out app repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Bump add-on version if needed
+      - name: Bump app version if needed
         id: bump
         shell: bash
         run: |
@@ -57,7 +58,7 @@ jobs:
           }
           const parts = match[1].split('.').map(Number);
           if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
-            console.error(`Unsupported add-on version: ${match[1]}`);
+            console.error(`Unsupported app version: ${match[1]}`);
             process.exit(1);
           }
           const now = new Date();
@@ -84,7 +85,7 @@ jobs:
           const changelogPath = 'dutch/CHANGELOG.md';
           if (fs.existsSync(changelogPath)) {
             const changelog = fs.readFileSync(changelogPath, 'utf8');
-            const entry = `## ${addonVersion}\n\n- Update the Home Assistant add-on wrapper.\n\n`;
+            const entry = `## ${addonVersion}\n\n- Updated the Home Assistant app.\n\n`;
             fs.writeFileSync(changelogPath, changelog.replace(/^# Changelog\n\n/, `# Changelog\n\n${entry}`));
           }
           NODE
@@ -92,7 +93,7 @@ jobs:
           echo "changed=true" >> "${GITHUB_OUTPUT}"
           echo "version=${addon_version}" >> "${GITHUB_OUTPUT}"
 
-      - name: Commit add-on version bump
+      - name: Commit app version bump
         if: steps.bump.outputs.changed == 'true'
         shell: bash
         run: |
@@ -107,5 +108,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Bump add-on version ${{ steps.bump.outputs.version }}"
+          git commit -m "Bump app version ${{ steps.bump.outputs.version }}"
           git push

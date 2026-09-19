@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.9.1
+
+- Includes Dutch 1.3.85.
+- Added a Dutch icon to the Home Assistant app.
+- Simplified the installation and app instructions.
+- Added the MIT license.
+
 ## 2026.9.0
 
 - Includes Dutch 1.3.84.

@@ -1,15 +1,29 @@
-# Dutch add-on documentation
+# Dutch app documentation
 
-This add-on wraps the bundled Dutch Node application from this repository.
+## Start the app
 
-## How updates work
+After installation, select **Start** on the Dutch app page. Enable
+**Start on boot** if you want Dutch to start automatically with Home
+Assistant.
 
-The Dutch source is copied into `app/` and built into the add-on image. When `gabbro246/dutch` changes, the repository workflow copies the latest source, records the upstream commit, keeps Dutch's package version in the bundled app, bumps the Home Assistant add-on version, and pushes a commit. Home Assistant detects that version change as a normal add-on update.
+Select **Open Web UI** to open the game. From there, create a game, add bots if
+wanted, and choose the game length.
 
-The workflow does not poll on a schedule. Configure the upstream Dutch repository to send a `repository_dispatch` event named `dutch-updated` to this repository after pushes to `main`.
+## Play on another device
 
-## Web UI
+Other phones, tablets, and computers on the same network can open:
 
-Open the web UI from the add-on page, or reverse proxy the mapped host port with nginx.
+`http://homeassistant.local:3000`
 
-The app uses Socket.IO, so the reverse proxy must support WebSockets.
+If that address is unavailable, replace `homeassistant.local` with the local
+IP address of your Home Assistant system. If you change the app's port under
+**Network**, use the new port in the address.
+
+## Game logs
+
+Important start and stop messages appear on the app's **Log** tab. Completed
+game logs are saved in Home Assistant's shared storage under
+`/share/dutch/logs`.
+
+You can change the log folder with `game_log_dir` on the app's
+**Configuration** tab.

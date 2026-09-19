@@ -1,21 +1,19 @@
 # Dutch
 
-Runs the Dutch card game from `gabbro246/dutch` as a Home Assistant add-on.
+Play the Dutch card game in a browser against people on your local network or
+against bots.
 
-The add-on includes the Dutch source code in `app/` and runs that bundled copy. Updates are published by copying the upstream Dutch source into this repository and bumping the Home Assistant add-on version.
+## Start playing
 
-## Updates
+Start the app, then select **Open Web UI**. Create a game, choose its length,
+and share the game with other players on your network.
 
-The repository workflow checks `gabbro246/dutch`, updates `app/` when the upstream commit changes, keeps Dutch's package version in the bundled app, and bumps `config.yaml`. Home Assistant then shows the add-on update normally.
+To play from another phone, tablet, or computer, open
+`http://homeassistant.local:3000`. If that address is unavailable, replace
+`homeassistant.local` with the local IP address of your Home Assistant
+system.
 
-The workflow does not poll on a schedule. It runs manually or when the upstream Dutch repository sends a `repository_dispatch` event named `dutch-updated` after a push to `main`.
+## Game logs
 
-## Network
-
-Container port `3000` is mapped to host port `3000` by default.
-
-## Logs
-
-Important lifecycle events such as game start and game end are written to the Home Assistant add-on log. Full per-game turn logs are saved as text files in `/share/dutch/logs` for Home Assistant access.
-
-The add-on maps Home Assistant's `share` folder into the container as `/share`. The `game_log_dir` setting defaults to `/share/dutch/logs`, so those log files are stored in the Home Assistant share folder. For local/non-add-on runs, Dutch falls back to `app/game-logs`.
+Completed game logs are saved in `/share/dutch/logs` by default. You can
+change this folder on the app's **Configuration** tab.

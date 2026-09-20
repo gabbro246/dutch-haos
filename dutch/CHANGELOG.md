@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.9.3
+
+- Includes Dutch 1.3.86.
+- Changed the player-list badge to say “You” instead of “User”.
+- Added the Dutch icon to browser tabs.
+- Simplified the README to focus on installing and playing the game.
+- Added the MIT license.
+
 ## 2026.9.2
 
 - Includes Dutch 1.3.85.

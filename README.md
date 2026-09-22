@@ -18,22 +18,6 @@ in Home Assistant's shared storage.
 4. Find **Dutch** in the app store and select **Install**.
 5. Start the app, then select **Open Web UI** to play.
 
-## Play on another device
-
-On a phone, tablet, or computer connected to the same network, open:
-
-`http://homeassistant.local:3000`
-
-If that address is unavailable, replace `homeassistant.local` with the local
-IP address of your Home Assistant system. If you change the app's port under
-**Network**, use the new port in the address.
-
-## Versions
-
-The Home Assistant app uses Calendar Versioning in the form
-`YYYY.M.RELEASE`. The bundled Dutch game keeps its own separate Semantic
-Version, shown in the app changelog.
-
 ## License
 
 [MIT](LICENSE)

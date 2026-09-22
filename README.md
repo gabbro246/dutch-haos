@@ -1,5 +1,9 @@
 # Dutch for Home Assistant
 
+<p align="center">
+  <img src="dutch/icon.png" alt="Dutch for Home Assistant icon" width="160">
+</p>
+
 Dutch is a local multiplayer card game that runs as a Home Assistant app. Play
 in a browser with other people on your network or against bots.
 
